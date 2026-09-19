@@ -2,7 +2,7 @@ mod api;
 pub mod client;
 mod worker;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use fs2::FileExt;
 use research_core::{Config, PROTOCOL, ServiceDescriptor};
 use research_store::Store;
@@ -41,7 +41,7 @@ pub fn secure_directory(dir: &Path) -> Result<()> {
             .arg(dir)
             .args(["/inheritance:r", "/grant:r", &format!("{user}:(OI)(CI)F")])
             .output()?;
-        ensure!(
+        anyhow::ensure!(
             result.status.success(),
             "Cannot restrict research data directory permissions"
         );
