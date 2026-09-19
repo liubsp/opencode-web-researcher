@@ -14,7 +14,11 @@ and works after remote deletion. For exact prompts and file locations, see
 [Reuse earlier research](../README.md#reuse-earlier-research). Resuming a remote conversation is
 separate and requires that the chat still exists and the thread remains eligible.
 
-The agent usually sends one focused question and at most two useful follow-ups. Each chat has a
+The agent starts with a short, conversational question and follows the evidence with useful
+corrections, narrower questions, or new directions. It doesn't dump the full task specification
+into its opening message or enforce a two-follow-up ceiling. Useful raw logs can be pasted unchanged
+in separate blocks with short questions; this guidance limits dense agent-written prose, not raw
+evidence. Each chat has a
 hard ten-prompt limit. Waiting and reading results are free. Messages to ChatGPT are casual, with
 no final period; the report back to you uses clear prose and source links.
 

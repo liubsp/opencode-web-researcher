@@ -82,4 +82,4 @@ The CI workflow targets Windows and macOS and packages the binary and npm tarbal
 [validation status](VALIDATION.md) for actual coverage rather than assuming every target is verified.
 
 Inspired by [ask-bridge](https://github.com/doggy8088/ask-bridge), independently rebuilt in focused
-Rust modules. The original design discussion is in [PLAN.md](../PLAN.md).
+Rust modules. The README and docs directory describe the current behavior and development workflow.

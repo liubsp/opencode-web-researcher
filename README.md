@@ -150,6 +150,10 @@ Ask your usual OpenCode agent:
 For a longer investigation, say **“use web-researcher with Deep Research”**.
 ChatGPT's model is configured separately from your OpenCode model.
 Deep Research only starts when explicitly requested, not just because a question is complex.
+The researcher starts with a short conversational question, then explores options and corrects
+assumptions as answers arrive. Useful raw diagnostics can be pasted verbatim in separate blocks
+with short questions, rather than rewritten into a dense brief. Follow-ups are adaptive, within
+the ten-prompt limit, without a fixed quota.
 To continue earlier work, give the agent the thread ID from its report and ask it to resume.
 
 Each chat allows up to 10 prompts. Messages are paced at 40 words/minute plus 15 seconds,
