@@ -21,11 +21,11 @@ The full captured exchanges are kept locally, not just the final report.
   Saves each prompt before sending and each completed exchange locally, even if the remote chat
   is later deleted. The agent distinguishes cited material from sources it independently checked.
 - **A dedicated OpenCode agent.** Only `web-researcher` can use the research tools; your coding
-  agent delegates to it. It uses Astra Low in OpenCode, with separate ChatGPT model/thinking settings.
+  agent delegates to it. It inherits your OpenCode session's model, with separate ChatGPT model/thinking settings.
 - **One shared setup, your choice of repos.** Opt in each repo separately; they share the background
   server, login, settings, and queue. You can route new chats into a configurable ChatGPT project.
 - **Patient, bounded conversations.** Messages are paced at 40 words/minute plus 15 seconds, with
-  up to 10 prompts per chat. Interrupted submissions aren't blindly resent.
+  up to 10 prompts per chat. Recovers interrupted requests without automatically sending duplicate messages.
 - **Local history, automatic cleanup.** Keeps local transcripts and deletes managed ChatGPT chats
   after 24 hours of inactivity or the tenth response, once their final local copy is verified.
 
@@ -97,7 +97,8 @@ You can leave the defaults alone, or edit the file:
 ```
 
 - **Model:** `default` keeps your ChatGPT account's choice. To choose another, use its label in
-  ChatGPT, not an API model ID. The OpenCode researcher separately uses **Astra Low**.
+  ChatGPT, not an API model ID. The OpenCode researcher inherits its parent session's model unless
+  you configure an agent-specific override in OpenCode.
 - **Thinking:** tries Extra High, then High if unavailable. If neither exists, it reports an error.
   Deep Research uses its own mode-managed controls.
 - **ChatGPT project:** to put new chats in a project, open it in ChatGPT and paste its full
@@ -118,7 +119,7 @@ Ask your usual OpenCode agent:
 > use web-researcher to compare these libraries using official sources, then check the weakest claim with a follow-up
 
 For a longer investigation, say **“use web-researcher with Deep Research”**.
-The researcher uses Astra Low in OpenCode; ChatGPT's model is configured separately.
+ChatGPT's model is configured separately from your OpenCode model.
 Deep Research only starts when explicitly requested, not just because a question is complex.
 To continue earlier work, give the agent the thread ID from its report and ask it to resume.
 
@@ -131,6 +132,35 @@ Local copies live beside `config.json`, under `transcripts/<thread-id>/<request-
 Final full-chat copies live under `archives/`. These aren't ChatGPT's **Archive chat** feature.
 Deleting a chat in ChatGPT doesn't remove captured local records. An answer deleted before it was
 captured can't be recovered. Local copies remain until you remove them yourself.
+
+### Reuse earlier research
+
+Ask your coding agent to delegate retrieval to the researcher:
+
+> use web-researcher to list this repo's previous research, including retired chats, and retrieve the findings about Chrome profiles without sending anything to ChatGPT
+
+If you have the thread ID from an earlier report:
+
+> use web-researcher to read the saved results for thread `<thread-id>` and use them to answer this question; don't send a new prompt
+
+The researcher uses `research_list` to find threads and `research_archive` to read stored prompts,
+answers, and citations—even for a chat deleted from ChatGPT. These operations read the local
+database and don't consume prompts or need Chrome. Despite its name, `research_archive` also
+reads results from active threads; it doesn't invoke ChatGPT's Archive feature.
+
+You can also open the files yourself, without OpenCode or the server:
+
+- Open the data directory beside `config.json` (paths are in **Configure** above).
+- Under `transcripts/<thread-id>/<request-id>/`, read **`exchange.md`** for the question and captured
+  answer. **`exchange.json`** includes request metadata and captured citations; **`prompt.json`**
+  is saved before sending, so it can exist before an answer is available.
+- After cleanup, `archives/<thread-id>/thread.md` and `thread.json` contain the final whole-thread copy.
+
+Reading old results is different from continuing the remote conversation. If the ChatGPT chat
+still exists and the thread is unexpired and below its limit, ask the researcher to resume it and
+send a follow-up. If it was deleted or retired, its captured results remain readable, but that
+remote chat can't be continued. Keep the database as well as the transcript folders when backing
+up: the agent retrieves history from the database, while the files are independently readable copies.
 
 ## Another repo, updates, and removal
 

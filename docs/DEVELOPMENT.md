@@ -5,7 +5,7 @@ browser and durable job state, so research can outlive an individual tool call.
 
 ```text
 OpenCode parent agent
-  -> web-researcher (Astra Low)
+  -> web-researcher (inherits the parent session's model by default)
     -> agent-scoped tools
       -> authenticated loopback API
         -> SQLite queue + pacing and budget checks

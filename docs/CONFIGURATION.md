@@ -27,8 +27,8 @@ inherit the same value. This selects a different data directory, including its p
 
 ## Two different model settings
 
-The OpenCode researcher uses `openai/gpt-6-astra#low`, set in its agent Markdown frontmatter.
-It writes prompts, waits, and summarizes results.
+The OpenCode researcher inherits its parent session's model by default. You can set an agent-specific
+override in OpenCode if you prefer. It writes prompts, waits, and summarizes results.
 
 The config above controls ChatGPT's website. `default` keeps the account's model choice. Other
 values are UI labels, not API model IDs. The service prefers Extra High and falls back to High.

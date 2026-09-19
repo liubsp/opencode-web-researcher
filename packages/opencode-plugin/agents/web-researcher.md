@@ -1,7 +1,6 @@
 ---
 description: Researches using ChatGPT in real Chrome, letting ChatGPT decide when to search; supports explicitly requested Deep Research. Patiently returns sourced findings using a dedicated, rate-limited research service.
 mode: subagent
-model: openai/gpt-6-astra#low
 permissions:
   - action: "*"
     resource: "*"

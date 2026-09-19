@@ -8,6 +8,12 @@ that matter: platform, versions, date range, or preference for official sources.
 For Deep Research, ask explicitly. A complicated question alone doesn't enable it.
 To continue earlier work, give the agent the thread ID from its report and ask it to resume.
 
+To reuse findings without sending another prompt, ask it to list previous research (including
+retired threads) and read the selected thread with `research_archive`. This reads the local database
+and works after remote deletion. For exact prompts and file locations, see
+[Reuse earlier research](../README.md#reuse-earlier-research). Resuming a remote conversation is
+separate and requires that the chat still exists and the thread remains eligible.
+
 The agent usually sends one focused question and at most two useful follow-ups. Each chat has a
 hard ten-prompt limit. Waiting and reading results are free. Messages to ChatGPT are casual, with
 no final period; the report back to you uses clear prose and source links.
