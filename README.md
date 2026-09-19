@@ -5,9 +5,29 @@
 
 Give your OpenCode agent a researcher that uses ChatGPT in real Chrome.
 
-Ask a question, let it work in the background, and get a summary with source links.
-Chrome stays minimized, your login is remembered, and follow-up questions stay in the same chat.
-Normal requests let ChatGPT decide when to search. Deep Research is available when you ask for it.
+Delegate an investigation without leaving your coding session. The researcher asks ChatGPT,
+reads the answers, follows up on gaps, and brings the findings back to your coding agent.
+The full captured exchanges are kept locally, not just the final report.
+
+## What you get
+
+- **Multi-step research.** Compare options, investigate a technical question, or challenge a claim.
+  Follow-ups stay in the same conversation, and you can resume earlier work by thread ID.
+- **Your ChatGPT account, in real Chrome.** Reuses a separate persistent login profile; no OpenAI
+  API key or browser extension needed. Chrome stays minimized while research runs.
+- **Normal chat or Deep Research.** ChatGPT decides when to search in normal mode. Deep Research
+  starts only when you explicitly ask for it.
+- **Answers you can revisit.** Captures response text, Markdown, and source links when provided.
+  Saves each prompt before sending and each completed exchange locally, even if the remote chat
+  is later deleted. The agent distinguishes cited material from sources it independently checked.
+- **A dedicated OpenCode agent.** Only `web-researcher` can use the research tools; your coding
+  agent delegates to it. It uses Astra Low in OpenCode, with separate ChatGPT model/thinking settings.
+- **One shared setup, your choice of repos.** Opt in each repo separately; they share the background
+  server, login, settings, and queue. You can route new chats into a configurable ChatGPT project.
+- **Patient, bounded conversations.** Messages are paced at 40 words/minute plus 15 seconds, with
+  up to 10 prompts per chat. Interrupted submissions aren't blindly resent.
+- **Local history, automatic cleanup.** Keeps local transcripts and deletes managed ChatGPT chats
+  after 24 hours of inactivity or the tenth response, once their final local copy is verified.
 
 ## Install
 
