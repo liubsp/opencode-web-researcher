@@ -36,7 +36,7 @@ Read-only source captures live in the separate `chat_reads` SQLite table and
 consume prompt reservations, or enter remote deletion. Completed/cancelled batches expire after
 `local_transcript_retention_days` since their last captured result; pending batches are retained.
 Saving and retrieval are project-scoped. The researcher returns paginated Markdown and provenance
-for the parent to use in repository artifacts. See [reading existing chats](../README.md#read-existing-chatgpt-chats).
+for the parent to use in repository artifacts. See [reading existing chats](USAGE.md#read-existing-chatgpt-chats).
 
 ## Global research queue and pacing
 
@@ -108,6 +108,32 @@ deletion is confirmed. Both files and database history are removed, so exports c
 Pending remote deletion is retained. Listing and polling don't extend inactivity; active or
 ambiguous work isn't deleted by expiry.
 
-If saving fails, deletion is blocked. Cleanup failures retry after 1, 2, 4, 8, 16, 32, then 60 minutes,
-with an hourly cap. Retry schedules survive restarts. A failed remote cleanup stops that batch;
-successful cleanup resets the counter. Retries verify saved transcripts and consume no prompts.
+If saving fails, deletion is blocked. Cleanup retires at most one chat per pass, waiting at least
+60 seconds after completion before the next pass, including after startup or wake. Cleanup failures
+also retry after 1, 2, 4, 8, 16, 32, then 60 minutes, with an hourly cap. Per-chat retry schedules
+survive restarts; successful cleanup resets the counter. Retries verify saved transcripts and
+consume no prompts.
+
+### Accessing transcript files
+
+Active chats have a combined capture at `transcripts/<thread-id>/thread.md`; final copies live at
+`archives/<thread-id>/thread.md`. Imports use `imports/<read-request-id>/<chat-index>.md`.
+Keep the database as well as transcript folders when backing up: agent history retrieval uses
+SQLite, while Markdown files are independently readable. No JSON transcript exports are produced.
+
+Tool responses expose `local_transcript.markdown.path`. The plugin publishes disposable Markdown
+copies under OpenCode's reported temporary directory so parent agents can read them using normal
+managed-temp access. Custom read-deny rules still apply. The researcher hands off only the plain
+absolute path for each transcript, without a metadata section or instructions for the parent's output.
+These paths are not clickable URLs.
+
+Temporary copies regenerate on retrieval while the database record is retained. The plugin removes
+its own unused copies older than 30 days when publishing. Ask your coding agent to copy a transcript
+into the repo if you want a permanent artifact. A capture may be incomplete; see
+[capture limitations](USAGE.md#read-existing-chatgpt-chats).
+
+### Response deadlines and Chrome discovery
+
+Normal responses have a 15-minute deadline; Deep Research has 30 minutes. A timeout preserves
+captured results and keeps observing rather than resending. Leave `chrome_path` as `null` for
+automatic discovery, or supply the Chrome executable path.

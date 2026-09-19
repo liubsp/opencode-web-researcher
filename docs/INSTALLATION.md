@@ -1,9 +1,24 @@
 # Setup
 
-Install once on your machine, then opt in each repository where you want the researcher.
-The server and Chrome login are shared; OpenCode's plugin registration is per repo.
+Install once on your machine, then register the researcher per repository or globally.
+The server and Chrome login are shared across registered projects.
 
-For all-project availability, use the [global installation commands](../README.md#or-install-for-every-project).
+## Global installation
+
+For all-project availability:
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.ps1').Content)) -Global
+```
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.sh | bash -s -- --global
+```
+
+This registers the plugin in `~/.config/opencode/opencode.json(c)` and the agent in
+`~/.config/opencode/agents/web-researcher.md`, or under `XDG_CONFIG_HOME` when configured.
+Remove old per-repo registrations when switching to global setup, then reload OpenCode locations.
+
 The bootstrap options are `-Global` (PowerShell) and `--global` (shell). Direct package setup also
 accepts `web-research-setup --global --binary <absolute-server-path>`. Global and project options
 are mutually exclusive. Global setup preserves existing settings and refuses to overwrite a
@@ -114,5 +129,32 @@ Prebuilt binaries don't need Rust. This package hasn't been published to npm.
 
 ## Remove it
 
-See [Uninstall in the README](../README.md#uninstall) for per-repo removal, shared-app removal
-commands on Windows/macOS, and optional deletion of the saved login and transcripts.
+For a global installation, remove the plugin entry from `~/.config/opencode/opencode.json(c)` and
+delete `~/.config/opencode/agents/web-researcher.md`, using `XDG_CONFIG_HOME` when configured.
+
+For a per-repo installation, remove the plugin entry from `opencode.json(c)` and delete
+`.opencode/agents/web-researcher.md`. Preserve other settings and any customized instructions you
+want to keep. Remove local Git exclude entries you added for these files.
+
+Reload affected OpenCode locations. Other registered repos keep working; shared login and saved
+research aren't deleted. Remove any separate global or per-repo registrations as needed.
+
+To remove the shared app, first unregister it everywhere, then stop the server and delete `app`:
+
+```powershell
+& "$env:LOCALAPPDATA\web-research-opencode\app\bin\web-research-server.exe" shutdown
+Remove-Item -LiteralPath "$env:LOCALAPPDATA\web-research-opencode\app" -Recurse -Force
+```
+
+```sh
+"$HOME/Library/Application Support/web-research-opencode/app/bin/web-research-server" shutdown
+rm -rf "$HOME/Library/Application Support/web-research-opencode/app"
+```
+
+If already stopped, `shutdown` may report that it can't connect. On Windows, let active requests
+finish shutting down before retrying a busy-file error. Chrome stays open after server shutdown;
+close the dedicated research window when finished.
+
+These commands preserve settings, login, database, and transcripts. To remove all saved data,
+back up what you need, close research Chrome, and delete the entire shared data directory listed
+above. Uninstalling doesn't delete conversations in ChatGPT; automatic cleanup stops with the server.
