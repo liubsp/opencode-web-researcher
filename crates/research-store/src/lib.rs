@@ -351,6 +351,33 @@ impl Store {
         }
         Ok(())
     }
+
+    pub fn purge_expired_transcripts(&mut self, dir: &Path, cutoff: i64) -> Result<usize> {
+        let mut removed = 0;
+        for thread in self.threads(None)? {
+            // Keep recoverable work and the local copy required by pending remote deletion.
+            if thread.state != "remote_deleted"
+                || thread.active_at >= cutoff
+                || !self.jobs(&thread.id)?.iter().all(Job::terminal)
+            {
+                continue;
+            }
+            for base in ["transcripts", "archives"] {
+                let path = dir.join(base).join(&thread.id);
+                match std::fs::remove_dir_all(path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            let tx = self.conn.transaction()?;
+            tx.execute("DELETE FROM jobs WHERE thread_id=?", [&thread.id])?;
+            tx.execute("DELETE FROM threads WHERE id=?", [&thread.id])?;
+            tx.commit()?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
 }
 
 fn write_once(path: &Path, bytes: &[u8]) -> Result<()> {

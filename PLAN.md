@@ -155,7 +155,7 @@ Retirement is an archive-before-delete workflow:
 1. Save the captured transcript, prompts, replies, citations, timestamps, model/level, errors, and partial-result markers to SQLite and atomically export readable Markdown plus structured JSON under the user data directory (`archives/<thread-id>/`). Capture any recoverable final content from the owned conversation before deletion.
 2. Verify the durable archive/export succeeded. An archive failure prevents remote deletion and is surfaced for retry.
 3. Delete that exact tracked conversation using ChatGPT's UI; verify the result before marking `remote_deleted`. No bulk deletion and no unrelated conversations.
-4. Close its owned tab and remove it from the active list. Keep archives, provenance, prompt counts, and idempotency records so result retrieval and late retries remain correct. Provide explicit archived-list/read operations; archive retention defaults to indefinite.
+4. Close its owned tab and remove it from the active list. Keep transcripts and database history for 30 days since last activity by default, then purge both after confirmed remote cleanup. Retain active, unresolved, and deletion-pending work. Provide explicit saved-history list/read operations during retention.
 
 Deletion states are `archive_pending -> archived -> deletion_pending -> remote_deleted`, with retryable errors. On reconnect, reconcile ambiguous deletion rather than treating an unavailable page as proof of deletion. Login expiry, Chrome closure, or a changed UI leaves an archived, non-resumable thread with deletion pending. Retiring/archived threads cannot be resumed or assigned a fresh prompt budget. Reading an archive never reopens ChatGPT.
 
@@ -312,7 +312,7 @@ Confirmed: OpenCode V2; project-local installation; research-agent-only tools; s
 
 No blocking product questions remain. Current browser interpretation: regular installed Chrome with a separate persistent research profile, as ask-bridge uses, rather than attachment to the everyday profile.
 
-Transcript retention is indefinite until explicitly removed; neither Extra High nor High being available in a mode with selectable thinking levels produces a clear error. Deep Research has a default 30-minute response deadline.
+Transcript retention defaults to 30 days since last activity after confirmed remote cleanup. Neither Extra High nor High being available in a mode with selectable thinking levels produces a clear error. Deep Research has a default 30-minute response deadline.
 
 ## Sources
 

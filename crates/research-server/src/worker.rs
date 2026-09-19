@@ -68,7 +68,12 @@ pub async fn run(state: State) {
         if last_cleanup.elapsed() >= Duration::from_secs(60) {
             // Recover exports after a crash or temporary disk failure without opening Chrome.
             let export = || -> Result<()> {
-                let store = state.store.lock().unwrap();
+                let mut store = state.store.lock().unwrap();
+                let config = Config::load(&state.dir)?;
+                store.purge_expired_transcripts(
+                    &state.dir,
+                    now() - (config.transcript_retention_days * 86400) as i64,
+                )?;
                 for thread in store.threads(None)? {
                     for job in store.jobs(&thread.id)? {
                         store.checkpoint(&job, &state.dir)?;

@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parse } from "jsonc-parser";
-import { mergePlugin } from "../src/install.ts";
+import { install, mergePlugin } from "../src/install.ts";
+import { mkdtemp, readFile, writeFile, rm, access } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("project installation preserves comments/settings and does not duplicate registrations", () => {
   const source = '{\n // my config\n "model":"custom", "plugins":["other-plugin"],\n}';
@@ -12,4 +15,22 @@ test("project installation preserves comments/settings and does not duplicate re
   assert.deepEqual(parse(twice).plugins, ["other-plugin", { package: "file:///plugin", options: { binary: "C:/updated.exe" } }]);
   assert.throws(() => mergePlugin('{ broken', 'plugin', 'binary'), /Invalid/);
   assert.throws(() => mergePlugin('{"plugins":{}}', 'plugin', 'binary'), /array/);
+});
+
+test("global setup uses the global agents directory and preserves customized instructions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "research-global-"));
+  try {
+    await writeFile(join(root, "opencode.jsonc"), '{ // keep me\n "shell":"custom"\n}');
+    await install(root, process.execPath, true);
+    const agent = join(root, "agents/web-researcher.md");
+    assert.match(await readFile(agent, "utf8"), /mode: subagent/);
+    await assert.rejects(access(join(root, ".opencode")));
+    await install(root, process.execPath, true);
+    const config = await readFile(join(root, "opencode.jsonc"), "utf8");
+    assert.match(config, /keep me/);
+    assert.equal(parse(config).plugins.length, 1);
+    await writeFile(agent, "custom instructions");
+    await assert.rejects(install(root, process.execPath, true), /Existing agent differs/);
+    assert.equal(await readFile(agent, "utf8"), "custom instructions");
+  } finally { await rm(root, {recursive:true, force:true}); }
 });

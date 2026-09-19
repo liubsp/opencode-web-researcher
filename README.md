@@ -55,6 +55,26 @@ Setup adds a plugin entry to your repo's `opencode.json(c)` and creates
 and doesn't commit anything. The config contains local absolute paths, so review it before committing.
 If switching from a checkout-based installation, remove its old plugin entry first.
 
+### Or install for every project
+
+Use `-Global` instead of `-Project ...` on Windows:
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.ps1').Content)) -Global
+```
+
+On macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.sh | bash -s -- --global
+```
+
+This registers the plugin in `~/.config/opencode/opencode.json(c)` and the agent in
+`~/.config/opencode/agents/web-researcher.md` (or under `XDG_CONFIG_HOME` when set).
+It makes the researcher available across projects without adding files to each repo. Tool access
+still belongs only to `web-researcher`, and results remain project-scoped. Remove old per-repo
+registrations when switching to global installation, then reload your OpenCode locations.
+
 ## Sign in
 
 **Windows · PowerShell**
@@ -89,7 +109,8 @@ You can leave the defaults alone, or edit the file:
   "reasoning_preferences": ["Extra High", "High"],
   "words_per_minute": 40,
   "fixed_pause_seconds": 15,
-  "inactivity_hours": 24,
+  "remote_chat_inactivity_hours": 24,
+  "local_transcript_retention_days": 30,
   "search_timeout_seconds": 900,
   "deep_research_timeout_seconds": 1800,
   "chrome_path": null
@@ -131,7 +152,9 @@ verifies a final local transcript before deleting the ChatGPT conversation.
 Local copies live beside `config.json`, under `transcripts/<thread-id>/<request-id>/`.
 Final full-chat copies live under `archives/`. These aren't ChatGPT's **Archive chat** feature.
 Deleting a chat in ChatGPT doesn't remove captured local records. An answer deleted before it was
-captured can't be recovered. Local copies remain until you remove them yourself.
+captured can't be recovered. Local transcripts and database history expire after 30 days since
+the thread's last activity, once remote cleanup is confirmed. Active/unresolved work and pending
+remote deletion are retained. Adjust `local_transcript_retention_days` to change this limit.
 
 ### Reuse earlier research
 
@@ -174,6 +197,11 @@ compare it with the installed package's `agents/web-researcher.md` before replac
 instructions aren't overwritten automatically.
 
 ## Uninstall
+
+**For a global installation:** remove the plugin entry from your global
+`~/.config/opencode/opencode.json(c)` and delete `~/.config/opencode/agents/web-researcher.md`,
+using `XDG_CONFIG_HOME` instead of `~/.config` if configured. Reload open OpenCode locations.
+Any separate per-repo registrations must be removed separately.
 
 **From one repo:**
 

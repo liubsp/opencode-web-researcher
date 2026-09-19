@@ -8,6 +8,10 @@ use std::{
 pub const PROTOCOL: u32 = 1;
 pub const PROMPT_LIMIT: u32 = 10;
 
+fn default_retention(value: &u64) -> bool {
+    *value == 30
+}
+
 pub fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -31,7 +35,14 @@ pub struct Config {
     pub reasoning_preferences: Vec<String>,
     pub words_per_minute: u32,
     pub fixed_pause_seconds: u64,
+    #[serde(rename = "remote_chat_inactivity_hours", alias = "inactivity_hours")]
     pub inactivity_hours: u64,
+    #[serde(skip_serializing_if = "default_retention")]
+    #[serde(
+        rename = "local_transcript_retention_days",
+        alias = "transcript_retention_days"
+    )]
+    pub transcript_retention_days: u64,
     pub search_timeout_seconds: u64,
     pub deep_research_timeout_seconds: u64,
     pub chrome_path: Option<PathBuf>,
@@ -47,6 +58,7 @@ impl Default for Config {
             words_per_minute: 40,
             fixed_pause_seconds: 15,
             inactivity_hours: 24,
+            transcript_retention_days: 30,
             search_timeout_seconds: 900,
             deep_research_timeout_seconds: 1800,
             chrome_path: None,
@@ -57,6 +69,10 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=36500).contains(&self.transcript_retention_days),
+            "local_transcript_retention_days must be 1..36500"
+        );
         if let Some(value) = &self.chatgpt_project_url {
             ensure!(
                 valid_project_url(value),
@@ -73,7 +89,7 @@ impl Config {
         );
         ensure!(
             (1..=8760).contains(&self.inactivity_hours),
-            "inactivity_hours must be 1..8760"
+            "remote_chat_inactivity_hours must be 1..8760"
         );
         ensure!(!self.model.trim().is_empty(), "model is empty");
         ensure!(

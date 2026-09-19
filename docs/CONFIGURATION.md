@@ -18,7 +18,8 @@ inherit the same value. This selects a different data directory, including its p
   "reasoning_preferences": ["Extra High", "High"],
   "words_per_minute": 40,
   "fixed_pause_seconds": 15,
-  "inactivity_hours": 24,
+  "remote_chat_inactivity_hours": 24,
+  "local_transcript_retention_days": 30,
   "search_timeout_seconds": 900,
   "deep_research_timeout_seconds": 1800,
   "chrome_path": null
@@ -64,8 +65,12 @@ Deleting a conversation manually in ChatGPT doesn't delete local records. An ans
 it was captured cannot be recovered; resume/follow-up operations may fail for a deleted chat.
 
 After 24 hours of inactivity or the tenth response, the service verifies a final full transcript before
-deleting the managed ChatGPT conversation. This isn't ChatGPT's **Archive chat** feature. Local
-copies remain until you remove them. Listing and polling don't extend inactivity; active or
+deleting the managed ChatGPT conversation. This isn't ChatGPT's **Archive chat** feature.
+
+The old config keys `inactivity_hours` and `transcript_retention_days` remain accepted as aliases.
+Local copies expire after `local_transcript_retention_days` (default 30) since last thread activity, once remote
+deletion is confirmed. Both files and database history are removed, so exports cannot recreate them.
+Pending remote deletion is retained. Listing and polling don't extend inactivity; active or
 ambiguous work isn't deleted by expiry.
 
 If saving fails, deletion is blocked. Cleanup failures retry after 1, 2, 4, 8, 16, 32, then 60 minutes,

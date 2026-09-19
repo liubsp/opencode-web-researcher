@@ -1,10 +1,12 @@
 param(
+    [switch]$Global,
     [string]$Project,
     [string]$Ref = 'main',
     [string]$InstallDir = "$env:LOCALAPPDATA\web-research-opencode\app",
     [string]$SourceDirectory
 )
 $ErrorActionPreference = 'Stop'
+if ($Global -and $Project) { throw 'Choose -Global or -Project, not both' }
 function Run([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Program failed ($LASTEXITCODE)" }
@@ -51,7 +53,9 @@ try {
     if (-not $copied) { throw 'Server executable remains busy; retry after active requests finish' }
     Run npm.cmd @('install','--prefix',$runtime,'--omit=dev','--no-audit','--no-fund',$package)
     Run $server @('configure')
-    if ($Project) {
+    if ($Global) {
+        Run node @((Join-Path $runtime 'node_modules\web-research-opencode\dist\install.js'),'--global','--binary',$server)
+    } elseif ($Project) {
         Run node @((Join-Path $runtime 'node_modules\web-research-opencode\dist\install.js'),'--project',$Project,'--binary',$server)
     }
     Write-Output "Installed server: $server"
@@ -59,8 +63,20 @@ try {
 } finally {
     try {
         if ($restart -and (Test-Path $server)) {
-            $null = & $server connect
-            if ($LASTEXITCODE -ne 0) { throw 'Installed server could not restart; inspect service.log' }
+            # Keep a detached daemon from inheriting the installer's captured output pipe.
+            $info = New-Object System.Diagnostics.ProcessStartInfo
+            $info.FileName = $server
+            $info.Arguments = 'connect'
+            $info.UseShellExecute = $false
+            $info.CreateNoWindow = $true
+            $info.RedirectStandardOutput = $true
+            $info.RedirectStandardError = $true
+            $process = [System.Diagnostics.Process]::Start($info)
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { throw 'Installed server could not restart; inspect service.log' }
+            $process.Dispose()
         }
     } finally {
         $lock.Dispose()

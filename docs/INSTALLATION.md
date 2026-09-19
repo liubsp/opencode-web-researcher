@@ -3,6 +3,12 @@
 Install once on your machine, then opt in each repository where you want the researcher.
 The server and Chrome login are shared; OpenCode's plugin registration is per repo.
 
+For all-project availability, use the [global installation commands](../README.md#or-install-for-every-project).
+The bootstrap options are `-Global` (PowerShell) and `--global` (shell). Direct package setup also
+accepts `web-research-setup --global --binary <absolute-server-path>`. Global and project options
+are mutually exclusive. Global setup preserves existing settings and refuses to overwrite a
+different agent definition, just like project setup.
+
 ## The quick route
 
 Use the [README commands](../README.md#install) from the target repository. They download and build

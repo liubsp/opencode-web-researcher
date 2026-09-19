@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 project="${1:-}"
+global=false
+if [[ "$project" == --global ]]; then global=true; project=""; fi
+[[ $# -le 1 ]] || { echo 'Usage: install.sh [--global | project-directory]' >&2; exit 1; }
 ref="${WEB_RESEARCH_REF:-main}"
 root="${WEB_RESEARCH_INSTALL_DIR:-$HOME/Library/Application Support/web-research-opencode/app}"
 [[ "$(uname -s)" == Darwin ]] || { echo 'This installer supports macOS; use install.ps1 on Windows' >&2; exit 1; }
@@ -37,7 +40,9 @@ chmod +x "$server.new"
 mv -f "$server.new" "$server"
 npm install --prefix "$root/runtime" --omit=dev --no-audit --no-fund "$stage/"*.tgz
 "$server" configure
-if [[ -n "$project" ]]; then
+if $global; then
+  node "$root/runtime/node_modules/web-research-opencode/dist/install.js" --global --binary "$server"
+elif [[ -n "$project" ]]; then
   node "$root/runtime/node_modules/web-research-opencode/dist/install.js" --project "$project" --binary "$server"
 fi
 echo "Installed server: $server"

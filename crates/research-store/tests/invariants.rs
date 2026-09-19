@@ -65,6 +65,31 @@ fn archive_is_durable_and_retirement_retries_preserve_it() -> Result<()> {
 }
 
 #[test]
+fn retention_requires_age_and_confirmed_remote_cleanup() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut store = Store::open(&dir.path().join("db"))?;
+    let mut job = store.submit(&input("old", None), Config::default(), 1)?;
+    store.finish(&mut job, "completed", None, 10)?;
+    store.checkpoint(&job, dir.path())?;
+    let mut thread = store.thread(&job.thread_id)?;
+    store.archive(&thread, dir.path())?;
+    assert_eq!(store.purge_expired_transcripts(dir.path(), 11)?, 0);
+    thread.state = "deletion_pending".into();
+    store.save_thread(&thread)?;
+    assert_eq!(store.purge_expired_transcripts(dir.path(), 11)?, 0);
+    thread.state = "remote_deleted".into();
+    store.save_thread(&thread)?;
+    assert_eq!(store.purge_expired_transcripts(dir.path(), 10)?, 0);
+    assert_eq!(store.purge_expired_transcripts(dir.path(), 11)?, 1);
+    assert!(store.thread(&thread.id).is_err());
+    assert!(store.job(&job.id).is_err());
+    assert!(!dir.path().join("transcripts").join(&thread.id).exists());
+    assert!(!dir.path().join("archives").join(&thread.id).exists());
+    assert_eq!(store.purge_expired_transcripts(dir.path(), 11)?, 0);
+    Ok(())
+}
+
+#[test]
 fn each_exchange_is_saved_before_retirement_and_recovers_from_database() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let db = dir.path().join("db");
