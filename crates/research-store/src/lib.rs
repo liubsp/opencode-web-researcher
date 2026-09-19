@@ -14,7 +14,7 @@ impl Store {
         let conn = Connection::open(path)?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            version <= 2,
+            version <= 3,
             "Database belongs to a newer research service; refusing to downgrade"
         );
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -28,7 +28,9 @@ impl Store {
              CREATE TABLE IF NOT EXISTS chat_reads (id TEXT PRIMARY KEY, project TEXT NOT NULL,
                  request_key TEXT NOT NULL, state TEXT NOT NULL, updated_at INTEGER NOT NULL,
                  data TEXT NOT NULL, UNIQUE(project,request_key));
-             PRAGMA user_version=2;")?;
+             CREATE UNIQUE INDEX IF NOT EXISTS single_active_research ON jobs((1))
+                 WHERE state IN ('pacing','preparing','submitting','waiting','timed_out','cancel_requested','submission_unknown','needs_attention');
+             PRAGMA user_version=3;")?;
         Ok(Self { conn })
     }
 
@@ -200,8 +202,46 @@ impl Store {
             return Ok(None);
         } // Do not overlap unknown in-flight browser work.
         let data: Option<String> = self.conn.query_row(
-            "SELECT data FROM jobs WHERE state IN ('queued','pacing','preparing','submitting','waiting','timed_out','cancel_requested') ORDER BY rowid LIMIT 1", [], |r| r.get(0)).optional()?;
+            "SELECT data FROM jobs WHERE state IN ('queued','pacing','preparing','submitting','waiting','timed_out','cancel_requested') ORDER BY CASE WHEN state='queued' THEN 1 ELSE 0 END, rowid LIMIT 1", [], |r| r.get(0)).optional()?;
         data.map(|s| Ok(serde_json::from_str(&s)?)).transpose()
+    }
+
+    /// Atomically occupy the single research slot before starting its full global pacing delay.
+    pub fn claim_next_job(&mut self, at: i64) -> Result<Option<Job>> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE state IN ('submission_unknown','needs_attention'))", [], |r| r.get(0))?;
+        if blocked {
+            return Ok(None);
+        }
+        let data: Option<String> = tx.query_row(
+            "SELECT data FROM jobs WHERE state IN ('queued','pacing','preparing','submitting','waiting','timed_out','cancel_requested') ORDER BY CASE WHEN state='queued' THEN 1 ELSE 0 END, rowid LIMIT 1", [], |r| r.get(0)).optional()?;
+        let Some(data) = data else {
+            return Ok(None);
+        };
+        let mut job: Job = serde_json::from_str(&data)?;
+        if job.state == "queued" {
+            let last: i64 = tx
+                .query_row(
+                    "SELECT value FROM metadata WHERE key='last_finished'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            job.state = "pacing".into();
+            job.send_after = Some(
+                at.max(last).max(job.created_at)
+                    + job.config.composition_seconds(&job.prompt) as i64,
+            );
+            tx.execute(
+                "UPDATE jobs SET state=?,data=? WHERE id=?",
+                params![job.state, serde_json::to_string(&job)?, job.id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(Some(job))
     }
 
     pub fn reconcile(&self, id: &str) -> Result<Job> {

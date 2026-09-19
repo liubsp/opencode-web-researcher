@@ -153,7 +153,12 @@ Deep Research only starts when explicitly requested, not just because a question
 To continue earlier work, give the agent the thread ID from its report and ask it to resume.
 
 Each chat allows up to 10 prompts. Messages are paced at 40 words/minute plus 15 seconds,
-so give it time. Each prompt is saved locally before sending, and each completed exchange is
+so give it time. Only one managed research request can occupy the shared server's research slot,
+across all projects and threads. The next request starts its full typing delay plus fixed pause
+after the previous request finishes; time spent queued doesn't count toward that delay. Creating
+another thread, switching projects, or cancelling a queued request cannot bypass pacing. Timed-out
+or ambiguous submissions keep the slot until observation/reconciliation establishes their outcome.
+Each prompt is saved locally before sending, and each completed exchange is
 saved in SQLite with Markdown exports. After 24 hours of inactivity or the tenth response, the service
 verifies a final local transcript before deleting the ChatGPT conversation.
 

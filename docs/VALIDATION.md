@@ -5,6 +5,9 @@ Implementation target: OpenCode 2.0.8, installed Google Chrome, Windows and macO
 ## Verified locally on Windows
 
 - Rust workspace compilation, persistence/policy tests, and local authenticated API tests.
+- Global research-slot tests cover separate database connections and projects, active-job recovery
+  priority, database rejection of a second active job, full pacing after queue wait/cancellation,
+  timeout/ambiguity blocking, monotonic timing, and conservative restart pacing.
 - Chrome 153 launch and reconnect using a persistent research profile, explicit nonzero debugging
   port, and no test-automation flag. The blank-page check reports `navigator.webdriver === false`.
 - Background tab creation and minimized-window operation; renderer-only focus emulation is used

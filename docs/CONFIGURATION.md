@@ -38,6 +38,16 @@ consume prompt reservations, or enter remote deletion. Completed/cancelled batch
 Saving and retrieval are project-scoped. The researcher returns paginated Markdown and provenance
 for the parent to use in repository artifacts. See [reading existing chats](../README.md#read-existing-chatgpt-chats).
 
+## Global research queue and pacing
+
+All managed research shares one active slot, enforced by a SQLite unique constraint and the single
+daemon worker. New threads may be queued, but only the head request begins pacing after the active
+request finishes. Every outgoing prompt waits `ceil(words / words_per_minute * 60)` plus
+`fixed_pause_seconds`; neither another thread/project nor time already spent queued grants credit.
+Restarting conservatively restarts the current pacing interval and refreshes its `send_after` estimate.
+Timeouts and ambiguous submissions don't authorize overlapping generations. Read-only source imports
+send no prompts and don't consume this budget.
+
 ## Idle browser lifecycle
 
 `chrome_auto_close` defaults to `true`. `chrome_idle_timeout_minutes` defaults to 30 and accepts

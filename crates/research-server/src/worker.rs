@@ -4,23 +4,25 @@ use research_browser::{Chrome, Page};
 use research_chatgpt as chatgpt;
 use research_core::{Config, Job, Thread, now};
 use serde_json::json;
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct PacingClock {
-    deadlines: HashMap<String, Instant>,
+    active: Option<(String, Instant)>,
 }
 
 impl PacingClock {
-    fn ready(&mut self, job: &Job, clock: Instant) -> bool {
+    fn ready(&mut self, job: &mut Job, clock: Instant, wall: i64) -> bool {
         // On restart, conservatively compose again. During a run, wall-clock jumps cannot shorten pacing.
-        let deadline = self.deadlines.entry(job.id.clone()).or_insert_with(|| {
-            clock + Duration::from_secs(job.config.composition_seconds(&job.prompt))
-        });
-        clock >= *deadline
+        if self.active.as_ref().is_none_or(|(id, _)| id != &job.id) {
+            let delay = job
+                .config
+                .composition_seconds(&job.prompt)
+                .max(job.send_after.unwrap_or(wall).saturating_sub(wall).max(0) as u64);
+            job.send_after = Some(wall + delay as i64);
+            self.active = Some((job.id.clone(), clock + Duration::from_secs(delay)));
+        }
+        clock >= self.active.as_ref().unwrap().1
     }
 }
 
@@ -28,7 +30,7 @@ pub async fn run(state: State) {
     let mut last_cleanup = Instant::now() - Duration::from_secs(60);
     let mut pacing = PacingClock::default();
     loop {
-        let job = state.store.lock().unwrap().next_job();
+        let job = state.store.lock().unwrap().claim_next_job(now());
         match job {
             Ok(Some(mut job)) => {
                 if let Err(error) = process(&state, &mut job, &mut pacing).await {
@@ -111,25 +113,23 @@ pub async fn run(state: State) {
 }
 
 async fn process(state: &State, job: &mut Job, pacing: &mut PacingClock) -> Result<()> {
-    if job.state == "queued" {
-        let store = state.store.lock().unwrap();
-        let base = now().max(store.last_finished()?).max(job.created_at);
-        job.send_after = Some(base + job.config.composition_seconds(&job.prompt) as i64);
-        job.state = "pacing".into();
-        store.save_job(job)?;
-    }
     if job.state == "pacing" {
         // Waiting does not hold the store lock; list/cancel/status stay responsive.
-        if !pacing.ready(job, Instant::now()) {
-            return Ok(());
-        }
         let store = state.store.lock().unwrap();
         if store.job(&job.id)?.state == "cancelled" {
             return Ok(());
         }
+        let before = job.send_after;
+        let ready = pacing.ready(job, Instant::now(), now());
+        if before != job.send_after {
+            store.save_job(job)?;
+        }
+        if !ready {
+            return Ok(());
+        }
         job.state = "preparing".into();
         store.save_job(job)?;
-        pacing.deadlines.remove(&job.id);
+        pacing.active = None;
     }
     let mut thread = state.store.lock().unwrap().thread(&job.thread_id)?;
     let chrome = Chrome::ensure(&state.dir, &job.config).await?;
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn pacing_uses_monotonic_time_and_restarts_conservatively() -> Result<()> {
         let mut store = Store::open(std::path::Path::new(":memory:"))?;
-        let job = store.submit(
+        let mut job = store.submit(
             &Submit {
                 project: "p".into(),
                 session: "s".into(),
@@ -457,12 +457,20 @@ mod tests {
         )?;
         let start = Instant::now();
         let mut clock = PacingClock::default();
-        assert!(!clock.ready(&job, start));
-        assert!(!clock.ready(&job, start + Duration::from_secs(17)));
-        assert!(clock.ready(&job, start + Duration::from_secs(18)));
+        assert!(!clock.ready(&mut job, start, 10));
+        assert!(!clock.ready(&mut job, start + Duration::from_secs(17), 9999));
+        assert!(clock.ready(&mut job, start + Duration::from_secs(18), 28));
         // A newly booted daemon never treats an old wall-clock timestamp as proof of elapsed pacing.
         let mut restarted = PacingClock::default();
-        assert!(!restarted.ready(&job, start + Duration::from_secs(500)));
+        assert!(!restarted.ready(&mut job, start + Duration::from_secs(500), 510));
+        assert_eq!(job.send_after, Some(528));
+        let mut next_thread = job.clone();
+        next_thread.id = "another-request".into();
+        next_thread.thread_id = "another-thread".into();
+        next_thread.send_after = None;
+        assert!(!clock.ready(&mut next_thread, start + Duration::from_secs(900), 910));
+        assert!(!clock.ready(&mut next_thread, start + Duration::from_secs(917), 927));
+        assert!(clock.ready(&mut next_thread, start + Duration::from_secs(918), 928));
         Ok(())
     }
 }
