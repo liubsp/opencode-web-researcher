@@ -28,6 +28,8 @@ The full captured exchanges are kept locally, not just the final report.
   up to 10 prompts per chat. Recovers interrupted requests without automatically sending duplicate messages.
 - **Local history, automatic cleanup.** Keeps local transcripts and deletes managed ChatGPT chats
   after 24 hours of inactivity or the tenth response, once their final local copy is verified.
+  Cleanup retires at most one chat per pass, with at least 60 seconds between passes after completion,
+  including after startup or wake. Failed deletions also retain their per-chat exponential backoff.
 
 ## Install
 

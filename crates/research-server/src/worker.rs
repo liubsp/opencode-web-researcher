@@ -362,10 +362,10 @@ async fn cleanup(state: &State) -> Result<()> {
             }
         }
         state.store.lock().unwrap().save_thread(&thread)?;
-        // Stop this cleanup batch after an error instead of hammering subsequent queued deletions.
-        if thread.cleanup_error.is_some() {
-            break;
-        }
+        // Retire at most one thread per pass, even on success. The worker waits a full
+        // 60 seconds after this pass finishes, so a startup/wake backlog cannot burst.
+        // Per-thread retry deadlines still apply independently above.
+        break;
     }
     Ok(())
 }
@@ -439,6 +439,53 @@ mod tests {
     }
     use research_core::Submit;
     use research_store::Store;
+
+    #[tokio::test]
+    async fn expired_backlog_retires_only_one_thread_per_pass() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut store = Store::open(&dir.path().join("state.sqlite"))?;
+        for index in 0..10 {
+            let mut job = store.submit(
+                &Submit {
+                    project: "p".into(),
+                    session: "s".into(),
+                    key: format!("expired-{index}"),
+                    thread_id: None,
+                    prompt: "test".into(),
+                    deep_research: false,
+                },
+                Config::default(),
+                1,
+            )?;
+            store.finish(&mut job, "failed", Some("never submitted".into()), 2)?;
+        }
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        let state = State {
+            dir: dir.path().into(),
+            store: std::sync::Arc::new(std::sync::Mutex::new(store)),
+            descriptor: research_core::ServiceDescriptor {
+                protocol: research_core::PROTOCOL,
+                port: 0,
+                token: "test".into(),
+                instance: "test".into(),
+                pid: 0,
+            },
+            notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            shutdown,
+        };
+        for expected in 1..=2 {
+            cleanup(&state).await?;
+            let threads = state.store.lock().unwrap().threads(None)?;
+            assert_eq!(
+                threads
+                    .iter()
+                    .filter(|t| t.state == "remote_deleted")
+                    .count(),
+                expected
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn pacing_uses_monotonic_time_and_restarts_conservatively() -> Result<()> {
