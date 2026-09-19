@@ -1114,6 +1114,7 @@ dependencies = [
  "research-core",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "url",

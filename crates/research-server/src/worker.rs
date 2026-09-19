@@ -87,6 +87,9 @@ pub async fn run(state: State) {
             if let Err(error) = cleanup(&state).await {
                 eprintln!("Cleanup error: {error}");
             }
+            if let Err(error) = close_idle_browser(&state).await {
+                eprintln!("Idle browser cleanup failed: {error}");
+            }
             last_cleanup = Instant::now();
         }
         tokio::select! {
@@ -284,6 +287,26 @@ async fn observe(state: &State, job: &mut Job, thread: &mut Thread, page: &mut P
     }
 }
 
+async fn close_idle_browser(state: &State) -> Result<()> {
+    {
+        let store = state.store.lock().unwrap();
+        for thread in store.threads(None)? {
+            if store
+                .jobs(&thread.id)?
+                .iter()
+                .any(|job| !job.terminal() && !matches!(job.state.as_str(), "queued" | "pacing"))
+            {
+                return Ok(());
+            }
+        }
+    }
+    let config = Config::load(&state.dir)?;
+    if Chrome::close_if_idle(&state.dir, &config).await? {
+        eprintln!("Closed idle research Chrome; browser work will reopen it automatically");
+    }
+    Ok(())
+}
+
 async fn cleanup(state: &State) -> Result<()> {
     let config = Config::load(&state.dir)?;
     let threads = state.store.lock().unwrap().threads(None)?;
@@ -371,6 +394,29 @@ async fn retire_remote(state: &State, thread: &Thread, config: &Config) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    #[ignore = "Requires Chrome; isolated profile and daemon, no account or submitted prompt"]
+    async fn daemon_closes_idle_chrome_without_an_api_request() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config = Config::default();
+        Chrome::ensure(dir.path(), &config).await?;
+        std::fs::File::options()
+            .write(true)
+            .open(dir.path().join("chrome-activity"))?
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))?;
+        let service = tokio::spawn(crate::serve(dir.path().to_owned()));
+        let closed = tokio::time::timeout(Duration::from_secs(20), async {
+            while dir.path().join("chrome.json").exists() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+        let descriptor = crate::client::discover(dir.path()).await?;
+        crate::client::rpc(&descriptor, json!({"op":"shutdown"}), 5).await?;
+        service.await??;
+        closed?;
+        Ok(())
+    }
     #[test]
     fn cleanup_backoff_grows_and_caps_without_overflow() {
         assert_eq!(

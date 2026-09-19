@@ -16,6 +16,7 @@ pub struct Page {
     pub id: String,
     socket: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     sequence: u64,
+    activity: Option<PathBuf>,
 }
 
 impl Page {
@@ -34,10 +35,14 @@ impl Page {
             id,
             socket,
             sequence: 0,
+            activity: None,
         })
     }
 
     pub async fn command(&mut self, method: &str, params: Value) -> Result<Value> {
+        if let Some(path) = &self.activity {
+            std::fs::write(path, research_core::now().to_string())?;
+        }
         self.sequence += 1;
         let id = self.sequence;
         self.socket
@@ -88,6 +93,7 @@ pub struct Chrome {
     pub port: u16,
     http: reqwest::Client,
     websocket: String,
+    activity: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,6 +139,85 @@ pub fn chrome_path(config: &Config) -> Result<PathBuf> {
 }
 
 impl Chrome {
+    /// Check the saved owned browser without launching it or refreshing its activity timer.
+    pub async fn close_if_idle(dir: &Path, config: &Config) -> Result<bool> {
+        if !config.chrome_auto_close {
+            return Ok(false);
+        }
+        let activity = dir.join("chrome-activity");
+        let idle = || -> bool {
+            std::fs::metadata(&activity)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|elapsed| {
+                    elapsed >= Duration::from_secs(config.chrome_idle_timeout_minutes * 60)
+                })
+        };
+        if !activity.exists() {
+            // Existing installations get a full idle interval after upgrade.
+            std::fs::write(&activity, research_core::now().to_string())?;
+            return Ok(false);
+        }
+        if !idle() {
+            return Ok(false);
+        }
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(dir.join("chrome.lock"))?;
+        if lock.try_lock_exclusive().is_err() {
+            return Ok(false);
+        }
+        let record_path = dir.join("chrome.json");
+        let bytes = match std::fs::read(&record_path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        let record: BrowserRecord = serde_json::from_slice(&bytes)?;
+        let profile = std::fs::canonicalize(dir.join("chrome-profile"))?;
+        ensure!(
+            record.profile == profile.to_string_lossy().trim_start_matches(r"\\?\"),
+            "Recorded Chrome profile does not match"
+        );
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()?;
+        let Ok(chrome) = Self::from_record(&record, http.clone()).await else {
+            return Ok(false);
+        };
+        if !idle() {
+            return Ok(false);
+        }
+        let mut browser = Page::connect("browser".into(), &chrome.websocket).await?;
+        // Browser.close can drop CDP before returning its reply. Confirm endpoint shutdown below.
+        browser
+            .socket
+            .send(Message::Text(
+                json!({"id":1,"method":"Browser.close","params":{}})
+                    .to_string()
+                    .into(),
+            ))
+            .await?;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if http
+                .get(format!("http://127.0.0.1:{}/json/version", chrome.port))
+                .send()
+                .await
+                .is_err()
+            {
+                std::fs::remove_file(record_path)?;
+                return Ok(true);
+            }
+        }
+        bail!("Idle Chrome did not finish shutting down")
+    }
+
     pub async fn ensure(dir: &Path, config: &Config) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let lock = std::fs::OpenOptions::new()
@@ -150,6 +235,8 @@ impl Chrome {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         ensure!(locked, "Timed out waiting for Chrome startup lock");
+        let activity = dir.join("chrome-activity");
+        std::fs::write(&activity, research_core::now().to_string())?;
         let profile = dir.join("chrome-profile");
         std::fs::create_dir_all(&profile)?;
         let profile = std::fs::canonicalize(profile)?;
@@ -170,7 +257,8 @@ impl Chrome {
                 record.profile == profile_arg,
                 "Recorded Chrome profile does not match"
             );
-            if let Ok(chrome) = Self::from_record(&record, http.clone()).await {
+            if let Ok(mut chrome) = Self::from_record(&record, http.clone()).await {
+                chrome.activity = Some(activity.clone());
                 chrome.minimize().await?;
                 return Ok(chrome);
             }
@@ -202,6 +290,7 @@ impl Chrome {
             port,
             http: http.clone(),
             websocket: String::new(),
+            activity: Some(activity.clone()),
         };
         for _ in 0..60 {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -227,7 +316,8 @@ impl Chrome {
                         .context("Missing browser endpoint")?
                         .into(),
                 };
-                let chrome = Self::from_record(&record, http.clone()).await?;
+                let mut chrome = Self::from_record(&record, http.clone()).await?;
+                chrome.activity = Some(activity.clone());
                 chrome.minimize().await?;
                 let tmp = dir.join("chrome.json.tmp");
                 std::fs::write(&tmp, serde_json::to_vec(&record)?)?;
@@ -269,10 +359,14 @@ impl Chrome {
             port: record.port,
             http,
             websocket: record.websocket.clone(),
+            activity: None,
         })
     }
 
     pub async fn targets(&self) -> Result<Vec<Value>> {
+        if let Some(path) = &self.activity {
+            std::fs::write(path, research_core::now().to_string())?;
+        }
         Ok(self
             .http
             .get(format!("http://127.0.0.1:{}/json/list", self.port))
@@ -283,12 +377,18 @@ impl Chrome {
             .await?)
     }
 
+    async fn browser_page(&self) -> Result<Page> {
+        let mut page = Page::connect("browser".into(), &self.websocket).await?;
+        page.activity = self.activity.clone();
+        Ok(page)
+    }
+
     pub async fn open(&self, url: &str) -> Result<Page> {
         ensure!(
             url == "about:blank" || valid_chat_url(url),
             "Only ChatGPT URLs are supported"
         );
-        let mut browser = Page::connect("browser".into(), &self.websocket).await?;
+        let mut browser = self.browser_page().await?;
         let created = browser
             .command("Target.createTarget", json!({"url":url,"background":true}))
             .await?;
@@ -307,7 +407,7 @@ impl Chrome {
     }
 
     pub async fn minimize(&self) -> Result<()> {
-        let mut browser = Page::connect("browser".into(), &self.websocket).await?;
+        let mut browser = self.browser_page().await?;
         let mut windows = std::collections::HashSet::new();
         for target in self
             .targets()
@@ -336,7 +436,7 @@ impl Chrome {
     }
 
     pub async fn window_state(&self, target: &str) -> Result<String> {
-        let mut browser = Page::connect("browser".into(), &self.websocket).await?;
+        let mut browser = self.browser_page().await?;
         let window = browser
             .command("Browser.getWindowForTarget", json!({"targetId":target}))
             .await?;
@@ -349,7 +449,7 @@ impl Chrome {
     /// Explicit human login is the only operation allowed to restore/activate a research window.
     pub async fn open_interactive(&self, url: &str) -> Result<Page> {
         let mut page = self.open(url).await?;
-        let mut browser = Page::connect("browser".into(), &self.websocket).await?;
+        let mut browser = self.browser_page().await?;
         let window = browser
             .command("Browser.getWindowForTarget", json!({"targetId":page.id}))
             .await?;
@@ -372,6 +472,7 @@ impl Chrome {
                 .context("Missing target endpoint")?,
         )
         .await?;
+        page.activity = self.activity.clone();
         // Keep renderer animations/stream updates alive in a minimized window. This is renderer-only
         // focus emulation, not Page.bringToFront or OS window activation.
         page.command(
@@ -403,6 +504,9 @@ impl Chrome {
     }
 
     pub async fn close(&self, target: &str) -> Result<()> {
+        if let Some(path) = &self.activity {
+            std::fs::write(path, research_core::now().to_string())?;
+        }
         ensure!(
             target
                 .chars()
@@ -447,6 +551,65 @@ pub fn conversation_url(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn idle_checks_do_not_launch_chrome_or_refresh_activity() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut config = Config {
+            chrome_path: Some(dir.path().join("missing-browser")),
+            ..Config::default()
+        };
+        assert!(!Chrome::close_if_idle(dir.path(), &config).await?);
+        let activity = dir.path().join("chrome-activity");
+        let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&activity)?
+            .set_modified(old)?;
+        config.chrome_auto_close = false;
+        assert!(!Chrome::close_if_idle(dir.path(), &config).await?);
+        config.chrome_auto_close = true;
+        assert!(!Chrome::close_if_idle(dir.path(), &config).await?);
+        assert_eq!(std::fs::metadata(activity)?.modified()?, old);
+        assert!(!dir.path().join("chrome.json").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires Chrome; isolated profile, no account or prompt submission"]
+    async fn idle_close_and_relaunch_restore_browser_access() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config = Config::default();
+        let chrome = Chrome::ensure(dir.path(), &config).await?;
+        let mut page = chrome.open("https://chatgpt.com/").await?;
+        let target = page.id.clone();
+        let activity = dir.path().join("chrome-activity");
+        let expire = || -> Result<()> {
+            std::fs::File::options()
+                .write(true)
+                .open(&activity)?
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))?;
+            Ok(())
+        };
+        expire()?;
+        page.eval("1 + 1").await?;
+        assert!(!Chrome::close_if_idle(dir.path(), &config).await?);
+        expire()?;
+        assert!(Chrome::close_if_idle(dir.path(), &config).await?);
+        assert!(!dir.path().join("chrome.json").exists());
+        drop(page);
+        let reopened = Chrome::ensure(dir.path(), &config).await?;
+        let mut page = reopened
+            .reconnect(Some(&target), Some("https://chatgpt.com/"))
+            .await?;
+        assert_ne!(page.id, target);
+        assert_eq!(page.eval("1 + 1").await?, 2);
+        assert_eq!(reopened.window_state(&page.id).await?, "minimized");
+        drop(page);
+        expire()?;
+        assert!(Chrome::close_if_idle(dir.path(), &config).await?);
+        Ok(())
+    }
 
     #[test]
     fn validates_chatgpt_origin_exactly() {

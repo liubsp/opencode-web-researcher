@@ -22,9 +22,24 @@ inherit the same value. This selects a different data directory, including its p
   "local_transcript_retention_days": 30,
   "search_timeout_seconds": 900,
   "deep_research_timeout_seconds": 1800,
-  "chrome_path": null
+  "chrome_path": null,
+  "chrome_auto_close": true,
+  "chrome_idle_timeout_minutes": 30
 }
 ```
+
+## Idle browser lifecycle
+
+`chrome_auto_close` defaults to `true`. `chrome_idle_timeout_minutes` defaults to 30 and accepts
+1–525600 minutes. Only the owned research-profile Chrome is closed. Service browser interactions
+reset the timer; local database reads and timer checks do not. Response observation counts as
+activity, and active or unresolved submissions prevent automatic closure.
+
+The running server checks these settings and all cleanup timers about once a minute even when no
+agent calls tools. Due remote deletions relaunch Chrome as needed. Browser-backed checks and new
+messages also relaunch it and reopen the persisted conversation URL when its tab is gone. Profile
+login survives closure. Local `status`, listing, and saved-result retrieval remain browser-free.
+Idle configuration is read live rather than from an older request's config snapshot.
 
 ## Two different model settings
 

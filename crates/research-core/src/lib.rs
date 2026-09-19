@@ -12,6 +12,10 @@ fn default_retention(value: &u64) -> bool {
     *value == 30
 }
 
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 pub fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -46,6 +50,10 @@ pub struct Config {
     pub search_timeout_seconds: u64,
     pub deep_research_timeout_seconds: u64,
     pub chrome_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "is_true")]
+    pub chrome_auto_close: bool,
+    #[serde(skip_serializing_if = "default_retention")]
+    pub chrome_idle_timeout_minutes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chatgpt_project_url: Option<String>,
 }
@@ -62,6 +70,8 @@ impl Default for Config {
             search_timeout_seconds: 900,
             deep_research_timeout_seconds: 1800,
             chrome_path: None,
+            chrome_auto_close: true,
+            chrome_idle_timeout_minutes: 30,
             chatgpt_project_url: None,
         }
     }
@@ -69,6 +79,10 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=525600).contains(&self.chrome_idle_timeout_minutes),
+            "chrome_idle_timeout_minutes must be 1..525600"
+        );
         ensure!(
             (1..=36500).contains(&self.transcript_retention_days),
             "local_transcript_retention_days must be 1..36500"

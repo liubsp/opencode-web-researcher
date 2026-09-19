@@ -113,13 +113,21 @@ You can leave the defaults alone, or edit the file:
   "local_transcript_retention_days": 30,
   "search_timeout_seconds": 900,
   "deep_research_timeout_seconds": 1800,
-  "chrome_path": null
+  "chrome_path": null,
+  "chrome_auto_close": true,
+  "chrome_idle_timeout_minutes": 30
 }
 ```
 
 - **Model:** `default` keeps your ChatGPT account's choice. To choose another, use its label in
   ChatGPT, not an API model ID. The OpenCode researcher inherits its parent session's model unless
   you configure an agent-specific override in OpenCode.
+- **Idle Chrome:** closes the dedicated research browser after 30 minutes without service browser
+  activity. Set `chrome_auto_close` to `false` to disable, or change `chrome_idle_timeout_minutes`.
+  Browser-backed checks, messages, and deletions automatically relaunch minimized Chrome and reopen
+  the saved chat. Active/unresolved requests are protected. The running server checks idle shutdown,
+  chat deletion, and transcript retention about once a minute without needing another command.
+  Local status/result polling doesn't open Chrome or reset its idle timer.
 - **Thinking:** tries Extra High, then High if unavailable. If neither exists, it reports an error.
   Deep Research uses its own mode-managed controls.
 - **ChatGPT project:** to put new chats in a project, open it in ChatGPT and paste its full
