@@ -1,4 +1,6 @@
 use anyhow::{Result, ensure};
+mod imports;
+pub use imports::{ChatReference, ReadRequest};
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,

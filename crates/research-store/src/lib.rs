@@ -3,6 +3,7 @@ use research_core::{Config, Job, PROMPT_LIMIT, Submit, Thread};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use uuid::Uuid;
+mod imports;
 
 pub struct Store {
     conn: Connection,
@@ -13,7 +14,7 @@ impl Store {
         let conn = Connection::open(path)?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            version <= 1,
+            version <= 2,
             "Database belongs to a newer research service; refusing to downgrade"
         );
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -24,7 +25,10 @@ impl Store {
                 created_at INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(project, request_key));
             CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(state,created_at);
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-            PRAGMA user_version=1;")?;
+             CREATE TABLE IF NOT EXISTS chat_reads (id TEXT PRIMARY KEY, project TEXT NOT NULL,
+                 request_key TEXT NOT NULL, state TEXT NOT NULL, updated_at INTEGER NOT NULL,
+                 data TEXT NOT NULL, UNIQUE(project,request_key));
+             PRAGMA user_version=2;")?;
         Ok(Self { conn })
     }
 

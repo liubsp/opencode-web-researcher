@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 pub mod observation;
+mod read;
 mod selection;
+pub use read::capture_rendered_chat;
 
 const INSPECT: &str = include_str!("scripts/inspect.js");
 const ACTION: &str = include_str!("scripts/action.js");

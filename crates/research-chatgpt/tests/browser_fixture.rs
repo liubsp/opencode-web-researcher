@@ -24,6 +24,15 @@ async fn extraction_and_input_against_a_chrome_fixture() -> Result<()> {
     let markdown = snapshot["turns"][1]["markdown"].as_str().unwrap();
     assert!(markdown.contains("[docs](https://example.org/docs)"));
     assert!(markdown.contains("```\nlet answer = 42;\n```"));
+    let read = research_chatgpt::capture_rendered_chat(&mut page).await?;
+    assert_eq!(read["turns"].as_array().unwrap().len(), 2);
+    assert!(
+        read["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("[docs](https://example.org/docs)")
+    );
+    assert_eq!(page.eval("window.sent === undefined && document.querySelector('#prompt-textarea').textContent === ''").await?, true);
     research_chatgpt::fill(&mut page, "new question pls").await?;
     research_chatgpt::fill(&mut page, "new question pls").await?; // recovery must not duplicate composer content
     assert!(

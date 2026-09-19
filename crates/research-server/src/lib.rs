@@ -1,5 +1,6 @@
 mod api;
 pub mod client;
+mod read_chats;
 mod worker;
 
 use anyhow::{Context, Result};

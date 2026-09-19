@@ -38,3 +38,17 @@ test("trusted execution context supplies project/session; repeated submissions k
   assert.deepEqual(calls[0].request, { project: "project-a", session: "session-a", key: "session-a:message-1",
     thread_id: null, prompt: "check docs pls", deep_research: false });
 });
+
+test("read-only imports retain trusted scope and stable retry keys", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const tool = tools("project-a", async input => { calls.push(input); return {}; }).find(t => t.name === "research_read_chats")!;
+  const ctx = { agent: "web-researcher", sessionID: "session-a", progress: async () => {} } as unknown as ToolContext;
+  const input = { chats: ["00000000-0000-4000-8000-000000000001"], request_key: "read-1", project: "forged", session: "forged" };
+  await tool.execute(input, ctx);
+  await tool.execute(input, ctx);
+  assert.deepEqual(calls[0], calls[1]);
+  assert.equal(calls[0].project, "project-a");
+  assert.equal(calls[0].session, "session-a");
+  assert.equal(calls[0].request_key, "session-a:read-1");
+  assert.equal(calls[0].op, "read_chats");
+});

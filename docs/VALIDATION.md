@@ -24,6 +24,11 @@ Implementation target: OpenCode 2.0.8, installed Google Chrome, Windows and macO
   expiry closes the owned browser, and subsequent access relaunches minimized Chrome and opens
   the requested ChatGPT URL after the old target is gone. A separate daemon test verified idle
   closure without an API request. No account prompts are sent by these lifecycle tests.
+- Read-only import live-tested against a user-supplied project chat: two messages and about 45,000
+  Markdown characters captured, with saved retrieval spanning three pages. A two-entry batch using
+  the project URL and bare conversation ID returned identical message bodies, without creating
+  managed research jobs. The source wasn't enrolled in deletion. Unit/API tests cover retry
+  identity, scope isolation, Unicode pagination, partial batch results, durability, and retention.
 - Logged-in Search request with account-default model and verified Extra High selection. Captured
   the complete answer, Markdown, and source links while minimized. Observation-only reconciliation
   recovered the original request without resending; exactly one prompt was consumed.

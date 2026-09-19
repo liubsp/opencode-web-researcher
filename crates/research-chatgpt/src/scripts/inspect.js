@@ -36,13 +36,13 @@
     return ['p','div','section','ul','ol','table','blockquote'].includes(tag) ? '\n' + text + '\n' : text;
   }
   return {
-    url: location.href.split('?')[0], composer: visible(composer),
+    url: location.href.split('?')[0], title: document.title, composer: visible(composer),
     composer_text: composer ? (composer.value ?? editableText(composer)).trim() : '',
     mode: composer?.querySelector('[data-system-hint-type="search"]') ? 'search' :
       composer?.querySelector('[data-id*="deep_research"],[data-system-hint-type="deep_research"]') ? 'deep_research' : null,
     login_required: buttons.some(b => /^(log in|sign in|sign up)$/i.test(label(b))) && !document.querySelector('[data-testid="profile-button"]'),
     busy: buttons.some(b => /stop (generating|streaming|response)|^stop$/i.test(label(b)) || /stop-button|composer-stop-button/.test(b.dataset.testid || b.id)),
-    turns: turns.map(el => ({role:el.getAttribute('data-message-author-role'), text:el.getAttribute('data-message-author-role') === 'user' ? editableText(el).trim() : el.innerText,
+    turns: turns.map(el => ({id:el.getAttribute('data-message-id'), role:el.getAttribute('data-message-author-role'), text:el.getAttribute('data-message-author-role') === 'user' ? editableText(el).trim() : el.innerText,
       markdown:markdown(el).replace(/\n{3,}/g,'\n\n').trim(),
       complete: el.getAttribute('data-message-author-role') === 'assistant' && !el.querySelector('.streaming-animation') &&
         !!el.closest('.agent-turn,article,[data-testid^="conversation-turn-"]')?.querySelector('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"]'),

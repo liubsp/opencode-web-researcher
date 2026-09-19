@@ -28,6 +28,15 @@ inherit the same value. This selects a different data directory, including its p
 }
 ```
 
+## Imported source chats
+
+Read-only source captures live in the separate `chat_reads` SQLite table and
+`imports/<read-request-id>/<chat-index>.json` / `.md`. They never become managed research threads,
+consume prompt reservations, or enter remote deletion. Completed/cancelled batches expire after
+`local_transcript_retention_days` since their last captured result; pending batches are retained.
+Saving and retrieval are project-scoped. The researcher returns paginated Markdown and provenance
+for the parent to use in repository artifacts. See [reading existing chats](../README.md#read-existing-chatgpt-chats).
+
 ## Idle browser lifecycle
 
 `chrome_auto_close` defaults to `true`. `chrome_idle_timeout_minutes` defaults to 30 and accepts

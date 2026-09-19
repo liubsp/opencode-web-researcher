@@ -164,6 +164,36 @@ captured can't be recovered. Local transcripts and database history expire after
 the thread's last activity, once remote cleanup is confirmed. Active/unresolved work and pending
 remote deletion are retained. Adjust `local_transcript_retention_days` to change this limit.
 
+### Read existing ChatGPT chats
+
+Give the researcher one or more ChatGPT conversation IDs or full conversation URLs, including
+project-scoped URLs:
+
+> use web-researcher to read these three ChatGPT chats: `<chat-url-1>`, `<chat-url-2>`, `<chat-id-3>`.
+> Summarize their agreements and contradictions without sending a new prompt
+
+Or ask the parent agent to build on curated material:
+
+> use web-researcher to read these chats, research any gaps in a separate chat, then combine the
+> findings into `docs/research.md`
+
+The researcher reads source chats without sending messages or deleting them. Read-only work has
+no prompt budget or composition delay. If more research is needed, it opens a separate managed
+chat; the parent handles repository files and Git. Source chats must be accessible to the signed-in
+research Chrome account; IDs aren't a way to access another account's private conversations.
+
+The tool accepts up to 10 chats per batch. `research_read_chats` returns a read request ID;
+`research_wait`/`research_get` return per-chat metadata and errors. `research_read_content` retrieves
+saved Markdown in pages using `chat_index` and `next_offset`. A retry uses the same request key;
+a new key creates a fresh capture. Reading a saved capture doesn't open Chrome.
+
+Captures cover the **rendered current branch**, including extracted message text and source links.
+Unloaded history, alternate branches, attachments, and separate report panels may be absent;
+capture limits and inaccessible chats are reported. This isn't a guaranteed full account export.
+Snapshots are stored in SQLite and `imports/<read-request-id>/<chat-index>.{json,md}` beside
+`config.json`. Completed imports expire after `local_transcript_retention_days` since capture,
+independently of the source chat. Importing never enrolls a source chat in remote auto-deletion.
+
 ### Reuse earlier research
 
 Ask your coding agent to delegate retrieval to the researcher:

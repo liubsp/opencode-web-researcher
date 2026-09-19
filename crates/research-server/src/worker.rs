@@ -65,11 +65,19 @@ pub async fn run(state: State) {
             Ok(None) => {}
             Err(error) => eprintln!("Queue error: {error}"),
         }
+        if let Err(error) = crate::read_chats::process_next(&state).await {
+            eprintln!("Chat read failed: {error}");
+        }
         if last_cleanup.elapsed() >= Duration::from_secs(60) {
             // Recover exports after a crash or temporary disk failure without opening Chrome.
             let export = || -> Result<()> {
                 let mut store = state.store.lock().unwrap();
                 let config = Config::load(&state.dir)?;
+                store.purge_expired_reads(
+                    &state.dir,
+                    now() - (config.transcript_retention_days * 86400) as i64,
+                )?;
+                store.checkpoint_reads(&state.dir)?;
                 store.purge_expired_transcripts(
                     &state.dir,
                     now() - (config.transcript_retention_days * 86400) as i64,
