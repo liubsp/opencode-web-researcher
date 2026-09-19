@@ -9,7 +9,7 @@ export class ResearchClient {
   constructor(private readonly binary: string) {}
 
   private connect(): Promise<Descriptor> {
-    return this.descriptor ??= exec(this.binary, ["connect"], { timeout: 20_000, windowsHide: true })
+    return this.descriptor ??= exec(this.binary, ["connect"], { timeout: 120_000, windowsHide: true })
       .then(({ stdout }) => {
         const value: Descriptor = JSON.parse(stdout);
         if (value.protocol !== 1 || !Number.isInteger(value.port) || value.port < 1 || value.port > 65535 || !value.token) {

@@ -39,6 +39,12 @@ the conversation appeared under that project in the sidebar. The migrated login 
 
 ## In progress
 
+The Windows bootstrap installer was exercised from a local source checkout: release build, npm
+pack/install, stable per-user paths, project setup, daemon shutdown and restart all completed.
+The installed `web-research-server` health check passed. The remote-download one-liner and macOS
+bootstrap still need separate verification. A final OpenCode location reload hit a service error
+for an unrelated missing worktree, so post-install plugin reload wasn't reverified in that run.
+
 - Optional Deep Research end-to-end flow, including clarification and long report completion.
 - Windows/macOS CI execution (workflow supplied; macOS is not locally available).
 

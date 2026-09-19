@@ -49,7 +49,7 @@ pub async fn ensure_running(dir: PathBuf, executable: &Path) -> Result<ServiceDe
     crate::secure_directory(&dir)?;
     // Every bootstrapper uses the same short-lived startup lock; the daemon uses a separate lifetime lock.
     let mut guard = None;
-    for _ in 0..100 {
+    for _ in 0..900 {
         if let Ok(lock) = crate::lock(&dir.join("startup.lock")) {
             guard = Some(lock);
             break;
@@ -84,11 +84,18 @@ pub async fn ensure_running(dir: PathBuf, executable: &Path) -> Result<ServiceDe
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    command.spawn().context("Could not spawn research daemon")?;
-    for _ in 0..100 {
+    let mut child = command.spawn().context("Could not spawn research daemon")?;
+    for attempt in 0..900 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         if let Ok(service) = discover(&dir).await {
             return Ok(service);
+        }
+        // An old daemon can still hold its lifetime lock while long-poll requests drain.
+        // Retry a failed child under the startup lock instead of requiring a second install.
+        if attempt % 10 == 9 && child.try_wait()?.is_some() {
+            child = command
+                .spawn()
+                .context("Could not restart research daemon")?;
         }
     }
     anyhow::bail!(
