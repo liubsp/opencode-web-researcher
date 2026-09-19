@@ -342,7 +342,7 @@ mod tests {
             1,
         )?;
         imported.state = "completed".into();
-        imported.results.push(json!({"markdown":"A你好👋Z","source_url":"https://chatgpt.com/c/00000000-0000-4000-8000-000000000001","turns":[]}));
+        imported.results.push(json!({"markdown":"Aéñ👋Z","source_url":"https://chatgpt.com/c/00000000-0000-4000-8000-000000000001","turns":[]}));
         state.store.lock().unwrap().save_read(&imported)?;
         let server = tokio::spawn(async move {
             axum::serve(listener, router(state)).await.unwrap();
@@ -366,13 +366,13 @@ mod tests {
         let health = crate::client::rpc(&descriptor, json!({"op":"health"}), 5).await?;
         assert_eq!(health["instance"], "test-instance");
         let page = crate::client::rpc(&descriptor, json!({"op":"read_content","project":"a","id":imported.id,"chat_index":0,"offset":1,"limit":3}), 5).await?;
-        assert_eq!(page["markdown"], "你好👋");
+        assert_eq!(page["markdown"], "éñ👋");
         assert_eq!(page["next_offset"], 4);
         assert_eq!(page["total_chars"], 5);
         let imported_path = page["local_transcript"]["markdown"]["path"]
             .as_str()
             .unwrap();
-        assert_eq!(std::fs::read_to_string(imported_path)?, "A你好👋Z");
+        assert_eq!(std::fs::read_to_string(imported_path)?, "Aéñ👋Z");
         assert!(
             crate::client::rpc(
                 &descriptor,

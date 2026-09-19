@@ -33,7 +33,7 @@ fn imports_are_durable_idempotent_and_never_managed_threads() -> Result<()> {
     assert!(store.next_job()?.is_none());
     assert_eq!(store.last_finished()?, 0);
     read.state = "reading".into();
-    read.results.push(json!({"chat_id":chats[0].id,"state":"completed","markdown":"# Saved\n\n你好 👋","turns":[{"role":"assistant"}]}));
+    read.results.push(json!({"chat_id":chats[0].id,"state":"completed","markdown":"# Saved\n\ncafé 👋","turns":[{"role":"assistant"}]}));
     store.save_read(&read)?;
     drop(store);
     let mut store = Store::open(&db)?;
@@ -47,7 +47,7 @@ fn imports_are_durable_idempotent_and_never_managed_threads() -> Result<()> {
     store.save_read(&read)?;
     store.checkpoint_reads(dir.path())?;
     let file = dir.path().join("imports").join(&read.id).join("0.md");
-    assert_eq!(std::fs::read_to_string(&file)?, "# Saved\n\n你好 👋");
+    assert_eq!(std::fs::read_to_string(&file)?, "# Saved\n\ncafé 👋");
     assert!(read.summary()["results"][0].get("markdown").is_none());
     assert_eq!(read.summary()["results"][1]["state"], "failed");
     assert!(store.threads(None)?.is_empty());

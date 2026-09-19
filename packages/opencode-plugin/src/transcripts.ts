@@ -2,7 +2,6 @@ import { Service } from "@opencode/client/service";
 import { readFile, mkdir, writeFile, readdir, stat, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve, join } from "node:path";
-import { pathToFileURL } from "node:url";
 
 export async function discoverTempDirectory(): Promise<string> {
   const endpoint = await Service.discover();
@@ -33,7 +32,7 @@ export async function publishTranscripts(value: unknown, directory: string): Pro
       const name = createHash("sha256").update(source).update(markdown).digest("hex") + ".md";
       const path = join(directory, name);
       await writeFile(path, markdown);
-      Object.assign(local, {markdown: {path, url: pathToFileURL(path).href}, temporary: true});
+      Object.assign(local, {markdown: {path}, temporary: true});
     } catch (error) {
       Object.assign(local, {markdown: null, error: `Temporary transcript export failed: ${String(error)}`});
     }

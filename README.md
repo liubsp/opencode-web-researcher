@@ -199,11 +199,12 @@ Snapshots are stored in SQLite and `imports/<read-request-id>/<chat-index>.md` b
 `config.json`. Completed imports expire after `local_transcript_retention_days` since capture,
 independently of the source chat. Importing never enrolls a source chat in remote auto-deletion.
 
-The researcher includes a **Full transcripts** section with links and absolute paths for every chat
-used. The server supplies `local_transcript` metadata; the plugin publishes Markdown copies with
-absolute paths and `file://` URLs under OpenCode's reported temporary directory.
+The researcher supplies absolute transcript paths as plain metadata to its parent. The server
+supplies `local_transcript.markdown.path`; the plugin publishes Markdown copies under OpenCode's
+reported temporary directory. These are local file paths, not clickable links. The parent decides
+whether to read, copy, or mention them and how to format its response.
 Managed threads also have a combined, up-to-date `transcripts/<thread-id>/thread.md`,
-so you can open the captured conversation before remote cleanup. Imported links open the full saved
+so you can read the captured conversation before remote cleanup. Imported paths refer to the full saved
 capture rather than a paginated excerpt. Capture limitations and normal retention still apply;
 ask the parent to copy transcripts into the repo if you want permanent project artifacts.
 OpenCode normally allows external-directory access to its managed temporary directory, so parent
