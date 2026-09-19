@@ -310,7 +310,7 @@ impl Store {
             // Write-once archives: retries verify existing bytes instead of replacing durable content.
             if path.exists() {
                 ensure!(
-                    std::fs::read(&path)? == bytes,
+                    transcript_matches(&path, &std::fs::read(&path)?, &bytes),
                     "Archive differs from persisted transcript: {}",
                     path.display()
                 );
@@ -380,10 +380,61 @@ impl Store {
     }
 }
 
+// Normalize only known config metadata, never prompts, responses, or unknown fields.
+fn transcript_matches(path: &Path, saved: &[u8], current: &[u8]) -> bool {
+    if saved == current {
+        return true;
+    }
+    if path.extension().is_none_or(|ext| ext != "json") {
+        return false;
+    }
+    fn normalize_job(job: &mut serde_json::Value) {
+        let Some(config) = job
+            .get_mut("config")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            return;
+        };
+        for (old, new) in [
+            ("inactivity_hours", "remote_chat_inactivity_hours"),
+            (
+                "transcript_retention_days",
+                "local_transcript_retention_days",
+            ),
+        ] {
+            if !config.contains_key(new)
+                && let Some(value) = config.remove(old)
+            {
+                config.insert(new.into(), value);
+            }
+        }
+        if config.get("local_transcript_retention_days") == Some(&serde_json::json!(30)) {
+            config.remove("local_transcript_retention_days");
+        }
+    }
+    fn normalize(bytes: &[u8]) -> Option<serde_json::Value> {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+        normalize_job(&mut value);
+        if let Some(requests) = value
+            .get_mut("requests")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for job in requests {
+                normalize_job(job);
+            }
+        }
+        Some(value)
+    }
+    match (normalize(saved), normalize(current)) {
+        (Some(saved), Some(current)) => saved == current,
+        _ => false,
+    }
+}
+
 fn write_once(path: &Path, bytes: &[u8]) -> Result<()> {
     if path.exists() {
         ensure!(
-            std::fs::read(path)? == bytes,
+            transcript_matches(path, &std::fs::read(path)?, bytes),
             "Saved transcript differs: {}",
             path.display()
         );
@@ -401,6 +452,27 @@ fn write_once(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transcript_config_aliases_preserve_integrity() {
+        let old = br#"{"config":{"inactivity_hours":24},"response":{"markdown":"saved"}}"#;
+        let new = br#"{"config":{"remote_chat_inactivity_hours":24,"local_transcript_retention_days":30},"response":{"markdown":"saved"}}"#;
+        assert!(transcript_matches(Path::new("exchange.json"), old, new));
+        let changed =
+            br#"{"config":{"remote_chat_inactivity_hours":24},"response":{"markdown":"changed"}}"#;
+        assert!(!transcript_matches(
+            Path::new("exchange.json"),
+            old,
+            changed
+        ));
+        assert!(!transcript_matches(Path::new("exchange.md"), old, new));
+        let archive_old = format!("{{\"requests\":[{}]}}", std::str::from_utf8(old).unwrap());
+        let archive_new = format!("{{\"requests\":[{}]}}", std::str::from_utf8(new).unwrap());
+        assert!(transcript_matches(
+            Path::new("thread.json"),
+            archive_old.as_bytes(),
+            archive_new.as_bytes()
+        ));
+    }
     fn input(key: &str, thread: Option<String>) -> Submit {
         Submit {
             project: "project-a".into(),
