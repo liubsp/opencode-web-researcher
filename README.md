@@ -1,4 +1,7 @@
-# web-research-opencode
+# 🦀 Web Research for OpenCode
+
+[![Rust](https://img.shields.io/badge/Built_with-Rust-000000?logo=rust)](https://www.rust-lang.org/)
+[![OpenCode V2](https://img.shields.io/badge/Works_with-OpenCode_V2-18181B)](https://opencode.ai/)
 
 Give your OpenCode agent a researcher that uses ChatGPT in real Chrome.
 
@@ -27,9 +30,66 @@ Run this from the repo where you want to use it:
 curl -fsSL https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.sh | bash -s -- "$PWD"
 ```
 
-Then run the installed server's `login` command to sign in to its separate Chrome profile,
-and reload your OpenCode project. See [setup](docs/INSTALLATION.md) for the exact paths,
-updates, and what the installer changes in your repo.
+Setup adds a plugin entry to your repo's `opencode.json(c)` and creates
+`.opencode/agents/web-researcher.md`. It doesn't change your application code or dependencies,
+and doesn't commit anything. The config contains local absolute paths, so review it before committing.
+If switching from a checkout-based installation, remove its old plugin entry first.
+
+## Sign in
+
+**Windows · PowerShell**
+
+```powershell
+& "$env:LOCALAPPDATA\web-research-opencode\app\bin\web-research-server.exe" login
+```
+
+**macOS**
+
+```sh
+"$HOME/Library/Application Support/web-research-opencode/app/bin/web-research-server" login
+```
+
+Sign in to ChatGPT in the window that opens, then reload your OpenCode project.
+This is a separate Chrome profile, so you only need to sign in once; your everyday Chrome login
+isn't inherited. Normal research keeps this window minimized. The server starts automatically.
+
+## Configure
+
+The installer creates a shared `config.json`:
+
+- **Windows:** `%LOCALAPPDATA%\web-research-opencode\config.json`
+- **macOS:** `~/Library/Application Support/web-research-opencode/config.json`
+
+You can leave the defaults alone, or edit the file:
+
+```json
+{
+  "model": "default",
+  "chatgpt_project_url": null,
+  "reasoning_preferences": ["Extra High", "High"],
+  "words_per_minute": 40,
+  "fixed_pause_seconds": 15,
+  "inactivity_hours": 24,
+  "search_timeout_seconds": 900,
+  "deep_research_timeout_seconds": 1800,
+  "chrome_path": null
+}
+```
+
+- **Model:** `default` keeps your ChatGPT account's choice. To choose another, use its label in
+  ChatGPT, not an API model ID. The OpenCode researcher separately uses **Astra Low**.
+- **Thinking:** tries Extra High, then High if unavailable. If neither exists, it reports an error.
+  Deep Research uses its own mode-managed controls.
+- **ChatGPT project:** to put new chats in a project, open it in ChatGPT and paste its full
+  `https://chatgpt.com/g/g-p-…/project` URL into `chatgpt_project_url`. Leave it `null` for ordinary
+  chats. Existing threads stay where they were created. Project instructions and files can affect answers.
+- **Timing:** normal responses have a 15-minute deadline; Deep Research has 30 minutes. A timeout
+  preserves captured results and keeps observing—it doesn't resend the question.
+- **Chrome:** leave `chrome_path` as `null` for automatic discovery, or supply its executable path.
+
+Settings apply to new requests without a restart; queued requests keep their original settings.
+All opted-in repos share these settings, the ChatGPT login, and one queue. Work in one repo may
+delay another. Prompts go to your ChatGPT account and use its limits; no OpenAI API key is needed.
 
 ## Use it
 
@@ -39,12 +99,87 @@ Ask your usual OpenCode agent:
 
 For a longer investigation, say **“use web-researcher with Deep Research”**.
 The researcher uses Astra Low in OpenCode; ChatGPT's model is configured separately.
+Deep Research only starts when explicitly requested, not just because a question is complex.
+To continue earlier work, give the agent the thread ID from its report and ask it to resume.
 
 Each chat allows up to 10 prompts. Messages are paced at 40 words/minute plus 15 seconds,
-so give it time. After 24 hours of inactivity or the tenth response, the service saves a
-local transcript before deleting the ChatGPT conversation.
+so give it time. Each prompt is saved locally before sending, and each completed exchange is
+saved as Markdown and JSON. After 24 hours of inactivity or the tenth response, the service
+verifies a final local transcript before deleting the ChatGPT conversation.
 
-## A little more detail
+Local copies live beside `config.json`, under `transcripts/<thread-id>/<request-id>/`.
+Final full-chat copies live under `archives/`. These aren't ChatGPT's **Archive chat** feature.
+Deleting a chat in ChatGPT doesn't remove captured local records. An answer deleted before it was
+captured can't be recovered. Local copies remain until you remove them yourself.
+
+## Another repo, updates, and removal
+
+Run the same install command from another repo to enable it there. Every repo points to the same
+installed app, not a Git checkout.
+
+Rerun the installer to update. It builds first, stops the shared server, replaces the app, and
+restarts it if it was running. Your login and data stay in place. Update while research is idle
+when possible, then reload your open OpenCode projects. If setup reports a differing agent file,
+compare it with the installed package's `agents/web-researcher.md` before replacing it; customized
+instructions aren't overwritten automatically.
+
+## Uninstall
+
+**From one repo:**
+
+1. Remove the `web-research-opencode` plugin entry from `opencode.json` or `opencode.jsonc`.
+   Keep any other settings and plugins in that file.
+2. Delete `.opencode/agents/web-researcher.md` (keep a copy if you customized it).
+3. Reload that OpenCode project. Remove any local Git exclude entries you added for these files.
+
+Other opted-in repos keep working. Your shared login and saved transcripts aren't deleted.
+
+**Remove the shared app from your machine:** first unregister it from every opted-in repo, then
+stop the server and delete its `app` directory:
+
+Windows PowerShell:
+
+```powershell
+& "$env:LOCALAPPDATA\web-research-opencode\app\bin\web-research-server.exe" shutdown
+Remove-Item -LiteralPath "$env:LOCALAPPDATA\web-research-opencode\app" -Recurse -Force
+```
+
+macOS:
+
+```sh
+"$HOME/Library/Application Support/web-research-opencode/app/bin/web-research-server" shutdown
+rm -rf "$HOME/Library/Application Support/web-research-opencode/app"
+```
+
+If the server was already stopped, `shutdown` may report that it can't connect. On Windows, if
+deletion says a file is busy, let active requests finish shutting down and retry. Chrome stays
+open after server shutdown; close the dedicated research Chrome window when you're finished.
+
+These commands keep your settings, Chrome login profile, database, and transcripts. For a complete
+data removal, back up any transcripts you want, close the research Chrome window, and delete the
+entire `web-research-opencode` data directory shown under **Configure**. That also removes the
+saved ChatGPT login. Uninstalling doesn't delete conversations from your ChatGPT account, and
+automatic conversation cleanup stops when the server is removed.
+
+## If something gets stuck
+
+Use the same full server path as the login command above, replacing `login` with:
+
+| Command | What it does |
+| --- | --- |
+| `doctor` | Show settings, paths, and Chrome discovery |
+| `status` | Check whether the server is running |
+| `browser-check` | Check Chrome connection and minimized operation |
+| `browser-inspect` | Check ChatGPT controls and login readiness |
+| `shutdown` | Stop the shared server; Chrome stays open |
+| `configure` | Create default config if missing and print its path |
+
+If the agent is missing, reload the right OpenCode project. If login is needed, run `login` again.
+For `submission_unknown` or `needs_attention`, fix the browser issue and ask the researcher to
+**reconcile the existing request**, rather than send it again. Don't manually navigate or send
+messages in its active research tab. ChatGPT UI changes can require a plugin update.
+
+## For developers and deeper details
 
 - [Install, update, or remove it](docs/INSTALLATION.md)
 - [Models, ChatGPT projects, and saved transcripts](docs/CONFIGURATION.md)

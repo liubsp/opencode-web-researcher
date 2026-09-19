@@ -48,7 +48,7 @@ impl Default for Config {
             fixed_pause_seconds: 15,
             inactivity_hours: 24,
             search_timeout_seconds: 900,
-            deep_research_timeout_seconds: 3600,
+            deep_research_timeout_seconds: 1800,
             chrome_path: None,
             chatgpt_project_url: None,
         }

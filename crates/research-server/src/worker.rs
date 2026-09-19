@@ -55,11 +55,30 @@ pub async fn run(state: State) {
                     }
                     eprintln!("Request {} needs attention: {error}", job.id);
                 }
+                let store = state.store.lock().unwrap();
+                if let Ok(current) = store.job(&job.id)
+                    && let Err(error) = store.checkpoint(&current, &state.dir)
+                {
+                    eprintln!("Local transcript save failed: {error}");
+                }
             }
             Ok(None) => {}
             Err(error) => eprintln!("Queue error: {error}"),
         }
         if last_cleanup.elapsed() >= Duration::from_secs(60) {
+            // Recover exports after a crash or temporary disk failure without opening Chrome.
+            let export = || -> Result<()> {
+                let store = state.store.lock().unwrap();
+                for thread in store.threads(None)? {
+                    for job in store.jobs(&thread.id)? {
+                        store.checkpoint(&job, &state.dir)?;
+                    }
+                }
+                Ok(())
+            };
+            if let Err(error) = export() {
+                eprintln!("Transcript recovery failed: {error}");
+            }
             if let Err(error) = cleanup(&state).await {
                 eprintln!("Cleanup error: {error}");
             }
@@ -126,6 +145,7 @@ async fn process(state: &State, job: &mut Job, pacing: &mut PacingClock) -> Resu
     thread.target = Some(page.id.clone());
     state.store.lock().unwrap().save_thread(&thread)?;
     if job.state == "preparing" {
+        state.store.lock().unwrap().checkpoint(job, &state.dir)?;
         if thread.url.is_none()
             && let Some(project_url) = &thread.chatgpt_project_url
         {

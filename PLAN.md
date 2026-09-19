@@ -312,7 +312,7 @@ Confirmed: OpenCode V2; project-local installation; research-agent-only tools; s
 
 No blocking product questions remain. Current browser interpretation: regular installed Chrome with a separate persistent research profile, as ask-bridge uses, rather than attachment to the everyday profile.
 
-Proposed archive retention is indefinite until explicitly removed; neither Extra High nor High being available in a mode with selectable thinking levels produces a clear error. Deep Research has a proposed 60-minute response deadline. These defaults can be adjusted during review.
+Transcript retention is indefinite until explicitly removed; neither Extra High nor High being available in a mode with selectable thinking levels produces a clear error. Deep Research has a default 30-minute response deadline.
 
 ## Sources
 

@@ -65,6 +65,42 @@ fn archive_is_durable_and_retirement_retries_preserve_it() -> Result<()> {
 }
 
 #[test]
+fn each_exchange_is_saved_before_retirement_and_recovers_from_database() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db = dir.path().join("db");
+    let mut store = Store::open(&db)?;
+    let mut first = store.submit(&input("first", None), Config::default(), 10)?;
+    store.checkpoint(&first, dir.path())?;
+    let folder = dir
+        .path()
+        .join("transcripts")
+        .join(&first.thread_id)
+        .join(&first.id);
+    assert!(folder.join("prompt.json").exists());
+    assert!(!folder.join("exchange.json").exists());
+    first.response = Some(serde_json::json!({"markdown":"first answer"}));
+    store.finish(&mut first, "completed", None, 20)?;
+    // Simulate shutdown after SQLite commit, before the file export. Recovery needs no browser.
+    drop(store);
+    let mut store = Store::open(&db)?;
+    store.checkpoint(&store.job(&first.id)?, dir.path())?;
+    let bytes = std::fs::read(folder.join("exchange.json"))?;
+    assert!(std::fs::read_to_string(folder.join("exchange.md"))?.contains("first answer"));
+    let mut second = store.submit(
+        &input("second", Some(first.thread_id.clone())),
+        Config::default(),
+        21,
+    )?;
+    second.response = Some(serde_json::json!({"markdown":"second answer"}));
+    store.finish(&mut second, "completed", None, 30)?;
+    store.checkpoint(&second, dir.path())?;
+    store.checkpoint(&first, dir.path())?;
+    assert_eq!(std::fs::read(folder.join("exchange.json"))?, bytes);
+    assert_eq!(store.thread(&first.thread_id)?.state, "active");
+    Ok(())
+}
+
+#[test]
 fn ambiguous_submission_blocks_new_work_until_observation_only_recovery() -> Result<()> {
     let mut store = Store::open(std::path::Path::new(":memory:"))?;
     let mut first = store.submit(&input("one", None), Config::default(), 1)?;

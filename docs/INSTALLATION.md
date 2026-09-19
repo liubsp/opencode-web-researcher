@@ -108,6 +108,5 @@ Prebuilt binaries don't need Rust. This package hasn't been published to npm.
 
 ## Remove it
 
-Remove the plugin entry and `.opencode/agents/web-researcher.md` from a repo, then reload that
-OpenCode location. Shared login and transcripts remain available to other opted-in repos.
-The server's `shutdown` command stops the daemon; another opted-in repo can start it again.
+See [Uninstall in the README](../README.md#uninstall) for per-repo removal, shared-app removal
+commands on Windows/macOS, and optional deletion of the saved login and transcripts.

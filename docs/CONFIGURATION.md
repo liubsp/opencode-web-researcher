@@ -20,7 +20,7 @@ inherit the same value. This selects a different data directory, including its p
   "fixed_pause_seconds": 15,
   "inactivity_hours": 24,
   "search_timeout_seconds": 900,
-  "deep_research_timeout_seconds": 3600,
+  "deep_research_timeout_seconds": 1800,
   "chrome_path": null
 }
 ```
@@ -55,7 +55,15 @@ files, and memory may influence the answer.
 The data directory holds `state.sqlite`, the separate Chrome profile, service/browser records,
 and saved transcripts at `archives/<thread-id>/thread.md` and `thread.json`.
 
-After 24 hours of inactivity or the tenth response, the service saves a local transcript before
+Prompts are saved before sending at `transcripts/<thread-id>/<request-id>/prompt.json`. Each completed
+exchange is saved alongside it as `exchange.md` and `exchange.json`, while the chat is still active.
+Captured partial responses also persist in SQLite. Missing exports are retried from that database
+after a restart or temporary disk failure; they don't require the ChatGPT conversation to exist.
+
+Deleting a conversation manually in ChatGPT doesn't delete local records. An answer deleted before
+it was captured cannot be recovered; resume/follow-up operations may fail for a deleted chat.
+
+After 24 hours of inactivity or the tenth response, the service verifies a final full transcript before
 deleting the managed ChatGPT conversation. This isn't ChatGPT's **Archive chat** feature. Local
 copies remain until you remove them. Listing and polling don't extend inactivity; active or
 ambiguous work isn't deleted by expiry.

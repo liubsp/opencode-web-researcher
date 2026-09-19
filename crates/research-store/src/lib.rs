@@ -325,6 +325,50 @@ impl Store {
         }
         Ok(())
     }
+
+    /// Write prompt before dispatch and each terminal exchange independently of remote cleanup.
+    pub fn checkpoint(&self, job: &Job, dir: &Path) -> Result<()> {
+        let folder = dir.join("transcripts").join(&job.thread_id).join(&job.id);
+        std::fs::create_dir_all(&folder)?;
+        let prompt = serde_json::to_vec_pretty(&serde_json::json!({
+            "request_id":job.id,"thread_id":job.thread_id,"prompt":job.prompt,
+            "created_at":job.created_at
+        }))?;
+        write_once(&folder.join("prompt.json"), &prompt)?;
+        if job.terminal() {
+            let json = serde_json::to_vec_pretty(job)?;
+            let markdown = format!(
+                "## User\n\n{}\n\n## ChatGPT ({})\n\n{}\n",
+                job.prompt,
+                job.state,
+                job.response
+                    .as_ref()
+                    .and_then(|r| r["markdown"].as_str())
+                    .unwrap_or("[No response captured]")
+            );
+            write_once(&folder.join("exchange.json"), &json)?;
+            write_once(&folder.join("exchange.md"), markdown.as_bytes())?;
+        }
+        Ok(())
+    }
+}
+
+fn write_once(path: &Path, bytes: &[u8]) -> Result<()> {
+    if path.exists() {
+        ensure!(
+            std::fs::read(path)? == bytes,
+            "Saved transcript differs: {}",
+            path.display()
+        );
+        return Ok(());
+    }
+    use std::io::Write;
+    let tmp = path.with_extension("tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(tmp, path)?;
+    Ok(())
 }
 
 #[cfg(test)]
