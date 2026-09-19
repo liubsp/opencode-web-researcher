@@ -1,0 +1,17 @@
+{
+  "name": "web-research-opencode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": { ".": "./dist/index.js", "./server": "./server.js" },
+  "bin": { "web-research-setup": "./dist/install.js" },
+  "files": ["dist", "agents", "server.js"],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": { "@opencode/plugin": "2.0.8", "jsonc-parser": "3.3.1" },
+  "devDependencies": { "@types/node": "^24.0.0", "tsx": "^4.20.0", "typescript": "^5.9.0" }
+}

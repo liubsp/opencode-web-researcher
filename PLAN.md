@@ -1,15 +1,15 @@
 # Web Research OpenCode — implementation plan
 
-Status: **Draft for review — implementation has not started.**
+Status: **Approved; implementation and live compatibility validation in progress.** See `docs/VALIDATION.md` for verified coverage.
 
 ## 1. Product decisions
 
-Build an OpenCode plugin installable separately into any chosen project that gives only its dedicated `web-research` agent access to ChatGPT through the user's regular Google Chrome. The daemon and model configuration are shared per OS user across opted-in projects. The core is Rust; a small TypeScript adapter integrates with OpenCode V2's JavaScript plugin API.
+Build an OpenCode plugin installable separately into any chosen project that gives only its dedicated `web-researcher` agent access to ChatGPT through installed Google Chrome, using ask-bridge's separate persistent research-profile approach. The daemon and model configuration are shared per OS user across opted-in projects. The core is Rust; a small TypeScript adapter integrates with OpenCode V2's JavaScript plugin API.
 
 Required behavior:
 
 - ChatGPT only.
-- An automatically started background server owns research tabs, requests, pacing, chat history, and limits; the user's regular Chrome remains user-owned.
+- An automatically started background server owns its research Chrome instance, tabs, requests, pacing, chat history, and limits; everyday Chrome windows remain user-owned.
 - Chats survive client exits and server restarts, can be listed and resumed, and expire after configurable inactivity.
 - Every outgoing message waits for a length-based composition delay plus a fixed pause.
 - Outgoing research messages use natural, informal, broken English. This is an explicit agent instruction with examples.
@@ -26,8 +26,8 @@ Required behavior:
 | Installation | Project-local plugin and agent; shared user-level daemon/settings |
 | Primary interface | Agent-only structured tools, contingent on proving visibility and execution isolation |
 | CLI | Small human-facing setup/diagnostics interface; no agent shell workflow |
-| Chrome | User's regular Chrome/profile; extension bridge proposed below |
-| Research mode | Search versus Deep Research still to confirm |
+| Chrome | Installed Google Chrome with a separate persistent research profile; background/minimized, no focus stealing, no extension |
+| Research mode | Search by default; Deep Research available as an explicit optional toggle |
 | ChatGPT model | Shared configurable choice; default to the account's default model |
 | Thinking level | Extra High when available, otherwise High; inspect actual subscription-dependent options |
 | Inactivity TTL | 24 hours |
@@ -37,7 +37,7 @@ Required behavior:
 | Additional fixed pause | 15 seconds per message, configurable |
 | Prompt limit | 10 total submissions per research thread, including the initial prompt |
 | Parallelism | One active ChatGPT request per profile, globally across projects |
-| Response deadline | 15 minutes after submission; queue/composition time accounted separately |
+| Response deadline | Search: 15 minutes; Deep Research: proposed 60 minutes; queue/composition time separate |
 | Initial release | Windows and macOS; develop on Windows first |
 
 The defaults are product choices, not claims that timing or wording guarantees any browser/account behavior.
@@ -59,14 +59,14 @@ Use it as a behavioral reference and source of known browser edge cases, rather 
 
 ```text
 OpenCode main agent
-    -> dedicated web-research agent
+    -> dedicated web-researcher agent
         -> TypeScript plugin tools
             -> authenticated loopback HTTP API
                 -> Rust daemon (one per OS user/profile)
                     -> durable queue + SQLite + pacing/budget policy
                     -> ChatGPT UI adapter
-                        -> Rust native-messaging relay
-                            -> Chrome extension -> user's regular Chrome tabs
+                        -> direct Chrome DevTools Protocol
+                            -> installed Chrome with persistent research profile
 
 Human setup/diagnostics CLI -> same daemon/API
 ```
@@ -78,16 +78,15 @@ Cargo.toml                         # workspace
 crates/
   research-core/src/               # IDs, entities, policies, state transitions
   research-store/src/              # SQLite repositories and migrations
-  research-browser/src/            # browser bridge, tab ownership, CDP commands
+  research-browser/src/            # Chrome lifecycle, tab ownership, CDP transport
   research-chatgpt/src/            # ChatGPT-specific UI workflow
     scripts/                      # small named DOM scripts, not huge Rust strings
   research-server/src/             # API, scheduler, recovery, expiry
   research-app/src/                # executable bootstrap, setup/doctor commands
 packages/
   opencode-plugin/src/             # tool registration, client, progress, lifecycle
-  chrome-extension/src/            # thin native-messaging/debugger bridge
 agents/
-  web-research.md                  # packaged agent definition and instructions
+  web-researcher.md                # packaged agent definition and instructions
 tests/
   fixtures/                       # synthetic/sanitized ChatGPT DOM fixtures
 docs/
@@ -102,7 +101,7 @@ docs/
 - `server` composes these modules. The plugin and CLI are clients, never alternate policy implementations.
 - Prefer focused concrete modules and narrow test seams over a generic multi-provider framework.
 
-Candidate libraries: Tokio, Serde, Axum, SQLite via SQLx or rusqlite, tracing, and thiserror. The regular-profile design uses CDP commands via Chrome's extension debugger transport rather than assuming a browser WebSocket is exposed. Confirm transport and command support in a browser spike. Keep policy, scheduling, storage, and ChatGPT workflow in Rust; the extension is a small transport adapter with packaged scripts. No additional Node/MCP browser process.
+Candidate libraries: Tokio, Serde, Axum, SQLite via SQLx or rusqlite, tracing, thiserror, and a maintained Rust CDP client such as chromiumoxide. Confirm launch/reconnect and command support in a browser spike before fixing the dependency. Connect directly to Chrome's debugging endpoint rather than routing browser operations through Node/MCP. Keep policy, scheduling, storage, and ChatGPT workflow in Rust.
 
 ## 4. Daemon lifecycle and local transport
 
@@ -111,13 +110,13 @@ Candidate libraries: Tokio, Serde, Axum, SQLite via SQLx or rusqlite, tracing, a
 3. It launches the packaged Rust executable detached, using explicit arguments and platform-specific process flags.
 4. The daemon takes a lifetime lock, binds an ephemeral loopback port, and atomically publishes its port, protocol version, instance ID, and access token in a user-private file.
 5. The client waits for readiness with a bounded startup timeout. Concurrent clients reuse the same instance.
-6. The daemon opens SQLite, recovers jobs, starts the expiry worker, and connects to the regular-Chrome extension bridge. If Chrome is closed, it may open regular Chrome, then await the paired extension; it never requires a manual server start.
+6. The daemon opens SQLite, recovers jobs, starts the expiry worker, and launches or reconnects its research-profile Chrome when needed; it never requires a manual server start.
 
 Bind only to loopback, validate authentication and Host/Origin, and do not enable permissive CORS. Restrict descriptor/database/archive permissions to the current user. Health probes check instance identity rather than trusting a recycled PID. Keep secrets and full chat text out of normal logs.
 
-The daemon outlives OpenCode tool calls and project windows. Plugin unload cancels subscriptions, not shared work. Initially keep the daemon resident until logout or explicit shutdown so expiry works continuously; on every restart also sweep expired records. Shutdown detaches the bridge and never terminates the user's Chrome. If Chrome is unavailable when deletion is due, persist pending deletion and retry when it reconnects; report the overdue status.
+The daemon outlives OpenCode tool calls and project windows. Plugin unload cancels subscriptions, not shared work. Initially keep the daemon resident until logout or explicit shutdown so expiry works continuously; on every restart also sweep expired records. Chrome process ownership is verified by profile path and browser identity, not PID alone. Shutdown may close only the managed research instance, never everyday Chrome. If Chrome is unavailable when deletion is due, persist pending deletion and retry when it reconnects; report the overdue status.
 
-Shared config lives in the OS user configuration directory; database, archives, service metadata, and logs live in user data/runtime directories, outside project repositories. Project installation changes only that project's OpenCode config and agent files. Global pacing and budget policy cannot be weakened by a project's plugin options.
+Shared config lives in the OS user configuration directory; database, archives, Chrome research profile, service metadata, and logs live in user data/runtime directories, outside project repositories. Project installation changes only that project's OpenCode config and agent files. Global pacing and budget policy cannot be weakened by a project's plugin options.
 
 The shared configuration exposes `chatgpt.model = "default"` or an explicit model label, and an ordered reasoning preference `["extra_high", "high"]`. These are application settings, not OpenCode model IDs. Inspect the real ChatGPT menu and record the selected model/level per request. Use Extra High when offered by that account/model, otherwise High. If neither exists, return `reasoning_unavailable` with available choices instead of silently lowering the requested level. A configured missing model similarly fails with available choices. Snapshot effective settings when a request is admitted so a later global edit does not silently change queued work.
 
@@ -182,10 +181,13 @@ The agent must stop when the limit is reached, summarize available findings, and
 
 ## 7. Chrome and ChatGPT adapter
 
-- Use the user's regular Chrome/profile and existing ChatGPT login. Return `needs_login` with actionable status if that session expires.
-- Proposed bridge: a Manifest V3 Chrome extension using `chrome.debugger` for tab-targeted CDP and `runtime.connectNative` to a Rust native-messaging relay. The relay connects to the shared daemon; it is not a second scheduler/server. Register the native host per user (HKCU on Windows; user NativeMessagingHosts directory on macOS), with a fixed allowed extension ID.
-- This avoids requiring debugging flags on the everyday Chrome profile: Chrome 136+ ignores remote-debugging port/pipe flags for the default data directory. An extension is a proposed setup requirement, pending user confirmation, rather than silently substituting a dedicated profile.
-- Scope bridge commands to paired, owned ChatGPT tabs. Handle debugger detach, DevTools conflicts, extension reload, browser restart, native message size limits/chunking, and reconnect. Chrome may display its debugging indicator. Do not terminate/relaunch the user's browser to recover a connection.
+- Discover installed Google Chrome on Windows/macOS, allow an explicit executable path, and launch it with a separate persistent `--user-data-dir` plus a loopback debugging endpoint. Discover the assigned endpoint dynamically and verify it belongs to the managed profile before attaching.
+- Use an explicit nonzero debugging port and no `--enable-automation` flag. Prove initial ownership with a unique local bootstrap page, then persist and verify Chrome's browser WebSocket identity on reconnect.
+- Normal launches are non-activating and minimized. Windows uses `SW_SHOWMINNOACTIVE`; macOS uses background application launch. New research tabs use `Target.createTarget` with `background: true`; no normal operation calls `Page.bringToFront`. The explicit human `login` command may restore the window. Renderer-only focus emulation keeps streaming DOM updates running without activating the OS window.
+- This is the same basic connection approach as ask-bridge, using direct Rust CDP instead of its MCP transport. No Chrome extension or native messaging host is required.
+- The research profile has its own login state: sign in to ChatGPT once, then reuse it across requests, restarts, and projects. Return `needs_login` if that session expires. Do not copy everyday-profile cookies or assume its login is inherited.
+- Chrome 136+ blocks traditional debugging flags on the default data directory, not on this separate research data directory. The previous extension proposal resulted from interpreting “regular Chrome” as “attach to the everyday profile”; installed Chrome with ask-bridge-style profile management is the current interpretation.
+- Scope commands to owned ChatGPT tabs. Handle CDP disconnects, browser restart, profile locks, user-closed tabs, and reconnection without touching everyday Chrome windows.
 - Create one owned target per active chat; record actual ChatGPT conversation URLs once assigned. Never navigate or close unrelated tabs.
 - Keep operations explicitly bound to target IDs. Serialize interactions and verify the expected conversation before typing and before clicking Send.
 - Prefer stable semantic attributes and accessibility signals, with centralized tested fallback selectors.
@@ -193,7 +195,10 @@ The agent must stop when the limit is reached, summarize available findings, and
 - Completion requires a new matching assistant turn and completion signals, not merely unchanged text or a missing Stop button during a thinking pause.
 - Extract Markdown structure and real citation destinations, retaining code blocks, lists, and tables. Avoid using the system clipboard as the primary extraction mechanism.
 - Detect login pages, rate limits, unavailable features, challenges, and changed UI as typed states. Do not consume extra prompts trying to repair them.
-- Search mode must be selected and verified if requested. If unavailable, report that fact rather than silently claiming web research. Deep Research has a different workflow and needs its own adapter states if included.
+- Search is the default and must be selected/verified before sending. If unavailable, report that fact rather than silently claiming web research.
+- Expose an explicit `deep_research` toggle when creating a research thread, defaulting to false. Record the effective mode for the thread; follow-ups inherit it. The user or delegating agent must explicitly request Deep Research; the research agent must not upgrade modes on its own.
+- Implement Deep Research as a distinct optional UI workflow, including availability/quota detection, clarification questions, any research-start confirmation, progress, and final-report extraction. Clarification messages submitted to ChatGPT count toward the same ten-prompt budget and use identical pacing. UI-only mode selection/start clicks are not prompts. Report an unavailable mode rather than silently falling back to Search.
+- Deep Research can exceed the normal 1–10 minute expectation. Give it a separate configurable response deadline (proposed default: 60 minutes), with the same durable waiting/cancellation behavior and no automatic resubmission. Apply model/thinking preferences where the mode exposes those controls; report mode-managed controls explicitly rather than claiming a level was selected.
 
 ## 8. OpenCode tools and agent delivery
 
@@ -210,11 +215,11 @@ Recommended agent tools:
 | `research_cancel` | Cancel queued work or request an in-flight stop |
 | `research_archive` | List/read local archived threads without contacting ChatGPT |
 
-A submit call returns quickly. `research_wait` can wait up to 60 seconds per call and reports progress (`queued`, `composing`, `thinking`, `researching`, `completed`) plus the next wait interval. The agent continues waiting through 1–10 minute research without sending another prompt. A 15-minute response deadline excludes queue/pacing; elapsed times and remaining budgets are explicit. Timeouts return partial state and allow observation of the same request instead of automatically resubmitting.
+A submit call returns quickly. `research_wait` can wait up to 60 seconds per call and reports progress (`queued`, `composing`, `thinking`, `researching`, `completed`) plus the next wait interval. The agent continues waiting through 1–10 minute Search research, or longer Deep Research, without sending another prompt. Mode-specific response deadlines exclude queue/pacing; elapsed times and remaining budgets are explicit. Timeouts return partial state and allow observation of the same request instead of automatically resubmitting.
 
 The thin plugin uses documented `Plugin.define`, `ctx.tool.transform`, and tool progress reporting. Verify cancellation and effective agent identity against the installed V2 SDK before implementing runtime access checks.
 
-**Agent installation detail:** the inspected V2 plugin guide exposes agent transforms with get/update/remove but no documented `add`. Do not assume a registration method exists. The installer will deploy the packaged Markdown agent to `<project>/.opencode/agents/web-research.md` and add the plugin to that project's `opencode.json(c)` while preserving unrelated settings. Detect user-customized agent files and report conflicts rather than overwriting them. No global OpenCode plugin/agent registration. Validate project discovery in the integration spike.
+**Agent installation detail:** the inspected V2 plugin guide exposes agent transforms with get/update/remove but no documented `add`. Do not assume a registration method exists. The installer will deploy the packaged Markdown agent to `<project>/.opencode/agents/web-researcher.md` and add the plugin to that project's `opencode.json(c)` while preserving unrelated settings. Detect user-customized agent files and report conflicts rather than overwriting them. No global OpenCode plugin/agent registration. Validate project discovery in the integration spike.
 
 **Mandatory agent isolation:** research tools must be absent from every other agent's tool schema and Code Mode discovery catalog, and direct invocation by another agent must be rejected. Use per-request context filtering (the documented context hook exposes agent/tools), agent permissions, and an execution-time check of trusted session/agent identity. Never use a model-supplied `agent` argument as authorization. Do not mutate a shared global tool registry on agent switches, since sessions can run concurrently. Verify how filtering propagates to Code Mode and how trusted identity reaches execution against the installed V2 SDK in the spike.
 
@@ -228,13 +233,15 @@ No shell CLI is needed for research. Keep a small executable interface for `setu
 
 The final packaged agent should include this behavior (tool details finalized after the API spike):
 
-> You are the web-research agent. Use the research tools to ask ChatGPT to research the user's actual question. Start one chat per research task and keep relevant follow-ups in that chat.
+> You are the web-researcher agent. Use the research tools to ask ChatGPT to research the user's actual question. Start one chat per research task and keep relevant follow-ups in that chat.
 >
 > Every message you send to ChatGPT MUST sound like a normal person typing casually in broken English: short sentences, lowercase where natural, contractions, occasional missing articles or rough grammar. Do not turn it into a polished consultant prompt, a role assignment, or a long instruction template. Keep technical names, dates, numbers, code and search terms exact. Be understandable; do not add random typos that change meaning. Do not claim to be a human.
 >
 > Ask for web research, sources, dates, and the actual tradeoff in ordinary language. Usually send one focused paragraph. Bundle closely related questions into the first message rather than producing many follow-ups.
 >
 > Research can take 1–10 minutes, plus queue and composition delay. Follow the server's wait guidance. A pending result is not an error. Never send “are you done”, repeat the prompt, or start another chat because an answer is slow.
+>
+> Use Search by default. Enable Deep Research only when explicitly requested by the user or delegating agent. Deep Research may take longer; follow its server-provided deadline. Answer necessary clarification questions concisely, with the same casual broken-English style and prompt budget.
 >
 > Aim for one initial prompt and zero to two follow-ups. Follow up only when an important gap or contradiction remains. Respect the remaining budget. At ten submitted prompts, stop, report what you found and what remains unresolved. Never start a new chat to bypass the limit.
 >
@@ -266,9 +273,9 @@ Style is enforced through the dedicated agent's prompt and review fixtures. A de
 
 - Publish an npm OpenCode plugin package with version-matched platform Rust binaries, preferably optional platform packages or checksummed release artifacts.
 - A documented project setup command installs project-local plugin config and the agent and verifies binary/protocol compatibility. Repeat in each project that should have research access.
-- One-time user-level browser setup registers the Rust native host and pairs the Chrome extension in the regular profile. Shared model/pacing settings and archives apply across opted-in projects.
+- One-time user-level browser setup opens installed Chrome with the persistent research profile for ChatGPT login. Shared model/pacing settings, profile, and archives apply across opted-in projects.
 - Normal project use requires no explicit daemon startup. Projects without installation do not gain the agent or tools.
-- Ship Windows and macOS binaries and test native-host registration on both. Use an unpacked extension for development; define a stable extension ID and Chrome Web Store distribution for normal installation. Chrome extension installation is a separate browser step, not something an npm package can silently complete.
+- Ship Windows and macOS binaries and test Chrome discovery, profile ownership, launch, and reconnection on both.
 - No Rust toolchain is required for end users. Chrome must be installed.
 - Version the local API and database migrations. Do not replace a busy daemon with an incompatible binary; report the required restart or drain it before upgrade.
 - Ship English troubleshooting for missing Chrome, login expiry, a locked profile, stale service descriptors, and UI changes.
@@ -277,7 +284,7 @@ Style is enforced through the dedicated agent's prompt and review fixtures. A de
 
 ### A. Compatibility spike
 
-Prove the extension/native-host bridge can connect to regular Chrome on Windows and macOS, send one message, detect a delayed completion, extract citations, and recover after detach/restart. Prove OpenCode V2 project-local plugin loading, packaged agent discovery, agent-only tool visibility/execution including Code Mode, progress, and bounded waiting. Verify model selection and Extra High-to-High fallback against actual account options. Verify ordinary Search versus Deep Research requirements. Record exact dependency versions and limitations.
+Prove direct Rust CDP can launch installed Chrome with a research profile on Windows and macOS, send one message, detect a delayed completion, extract citations, and recover after disconnect/restart. Prove OpenCode V2 project-local plugin loading, packaged agent discovery, agent-only tool visibility/execution including Code Mode, progress, and bounded waiting. Verify model selection and Extra High-to-High fallback against actual account options. Validate default Search and explicitly toggled Deep Research, including clarifications, unavailable quotas, and long-running reports. Record exact dependency versions and limitations.
 
 ### B. Core and persistence
 
@@ -301,16 +308,11 @@ Run formatting, Clippy, Rust tests, TypeScript type checks, protocol contract ch
 
 ## 12. Review decisions and remaining questions
 
-Confirmed: OpenCode V2; project-local installation; research-agent-only tools; shared configurable ChatGPT model with default model and Extra High/High preference; regular Chrome; 24-hour inactivity or ten-prompt retirement with remote deletion and preserved local copies; 40 WPM + 15 seconds; ten total prompts; Windows and macOS.
+Confirmed: OpenCode V2; project-local installation; research-agent-only tools; shared configurable ChatGPT model with default model and Extra High/High preference; installed Chrome without an extension, following ask-bridge's profile approach; Search by default with optional Deep Research toggle; 24-hour inactivity or ten-prompt retirement with remote deletion and preserved local copies; 40 WPM + 15 seconds; ten total prompts; Windows and macOS.
 
-Git identity requested globally: `Liu <12598936+liubsp@users.noreply.github.com>`.
+No blocking product questions remain. Current browser interpretation: regular installed Chrome with a separate persistent research profile, as ask-bridge uses, rather than attachment to the everyday profile.
 
-Remaining questions:
-
-1. Is installing a small Chrome extension in your regular profile acceptable for the browser bridge?
-2. Does research use ordinary ChatGPT **Search**, **Deep Research**, or both? Thinking level/model selection is independent of this choice.
-
-Proposed archive retention is indefinite until explicitly removed, and neither Extra High nor High being available produces a clear error. These defaults can be adjusted during review.
+Proposed archive retention is indefinite until explicitly removed; neither Extra High nor High being available in a mode with selectable thinking levels produces a clear error. Deep Research has a proposed 60-minute response deadline. These defaults can be adjusted during review.
 
 ## Sources
 
@@ -319,5 +321,3 @@ Proposed archive retention is indefinite until explicitly removed, and neither E
 - OpenCode V2 plugins: https://opencode.ai/v2/docs/build/plugins
 - OpenCode V2 agents: https://opencode.ai/v2/docs/agents
 - Chrome default-profile debugging restriction: https://developer.chrome.com/blog/remote-debugging-port
-- Chrome extension debugger transport: https://developer.chrome.com/docs/extensions/reference/api/debugger
-- Chrome native messaging: https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
