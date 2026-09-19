@@ -82,17 +82,19 @@ impl Store {
         let mut stmt = self.conn.prepare("SELECT data FROM chat_reads")?;
         for row in stmt.query_map([], |r| r.get::<_, String>(0))? {
             let request: ReadRequest = serde_json::from_str(&row?)?;
-            let folder = dir.join("imports").join(&request.id);
-            std::fs::create_dir_all(&folder)?;
-            for (index, result) in request.results.iter().enumerate() {
-                write_once(
-                    &folder.join(format!("{index}.json")),
-                    &serde_json::to_vec_pretty(result)?,
-                )?;
-                if let Some(markdown) = result["markdown"].as_str() {
-                    write_once(&folder.join(format!("{index}.md")), markdown.as_bytes())?;
-                }
+            self.checkpoint_read(&request, dir)?;
+        }
+        Ok(())
+    }
+
+    pub fn checkpoint_read(&self, request: &ReadRequest, dir: &Path) -> Result<()> {
+        let folder = dir.join("imports").join(&request.id);
+        std::fs::create_dir_all(&folder)?;
+        for (index, result) in request.results.iter().enumerate() {
+            if let Some(markdown) = result["markdown"].as_str() {
+                write_once(&folder.join(format!("{index}.md")), markdown.as_bytes())?;
             }
+            remove_legacy_json(&folder.join(format!("{index}.json")))?;
         }
         Ok(())
     }

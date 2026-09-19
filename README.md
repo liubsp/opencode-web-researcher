@@ -154,7 +154,7 @@ To continue earlier work, give the agent the thread ID from its report and ask i
 
 Each chat allows up to 10 prompts. Messages are paced at 40 words/minute plus 15 seconds,
 so give it time. Each prompt is saved locally before sending, and each completed exchange is
-saved as Markdown and JSON. After 24 hours of inactivity or the tenth response, the service
+saved in SQLite with Markdown exports. After 24 hours of inactivity or the tenth response, the service
 verifies a final local transcript before deleting the ChatGPT conversation.
 
 Local copies live beside `config.json`, under `transcripts/<thread-id>/<request-id>/`.
@@ -190,9 +190,22 @@ a new key creates a fresh capture. Reading a saved capture doesn't open Chrome.
 Captures cover the **rendered current branch**, including extracted message text and source links.
 Unloaded history, alternate branches, attachments, and separate report panels may be absent;
 capture limits and inaccessible chats are reported. This isn't a guaranteed full account export.
-Snapshots are stored in SQLite and `imports/<read-request-id>/<chat-index>.{json,md}` beside
+Snapshots are stored in SQLite and `imports/<read-request-id>/<chat-index>.md` beside
 `config.json`. Completed imports expire after `local_transcript_retention_days` since capture,
 independently of the source chat. Importing never enrolls a source chat in remote auto-deletion.
+
+The researcher includes a **Full transcripts** section with links and absolute paths for every chat
+used. The server supplies `local_transcript` metadata; the plugin publishes Markdown copies with
+absolute paths and `file://` URLs under OpenCode's reported temporary directory.
+Managed threads also have a combined, up-to-date `transcripts/<thread-id>/thread.md`,
+so you can open the captured conversation before remote cleanup. Imported links open the full saved
+capture rather than a paginated excerpt. Capture limitations and normal retention still apply;
+ask the parent to copy transcripts into the repo if you want permanent project artifacts.
+OpenCode normally allows external-directory access to its managed temporary directory, so parent
+agents can read these copies without new permission rules. Custom read-deny rules still apply.
+SQLite holds structured data; no JSON transcript exports are produced. Temporary Markdown copies
+can be regenerated on retrieval and may be removed by temp cleanup. The plugin removes its own
+unused copies older than 30 days when publishing exports.
 
 ### Reuse earlier research
 
@@ -213,9 +226,9 @@ You can also open the files yourself, without OpenCode or the server:
 
 - Open the data directory beside `config.json` (paths are in **Configure** above).
 - Under `transcripts/<thread-id>/<request-id>/`, read **`exchange.md`** for the question and captured
-  answer. **`exchange.json`** includes request metadata and captured citations; **`prompt.json`**
+  answer. Structured metadata and captured citations remain in SQLite; **`prompt.md`**
   is saved before sending, so it can exist before an answer is available.
-- After cleanup, `archives/<thread-id>/thread.md` and `thread.json` contain the final whole-thread copy.
+- After cleanup, `archives/<thread-id>/thread.md` contains the final whole-thread copy.
 
 Reading old results is different from continuing the remote conversation. If the ChatGPT chat
 still exists and the thread is unexpired and below its limit, ask the researcher to resume it and

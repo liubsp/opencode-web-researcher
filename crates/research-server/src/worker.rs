@@ -86,6 +86,9 @@ pub async fn run(state: State) {
                     for job in store.jobs(&thread.id)? {
                         store.checkpoint(&job, &state.dir)?;
                     }
+                    if thread.state == "remote_deleted" {
+                        store.archive(&thread, &state.dir)?;
+                    }
                 }
                 Ok(())
             };

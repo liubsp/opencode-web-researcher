@@ -29,6 +29,10 @@ Implementation target: OpenCode 2.0.8, installed Google Chrome, Windows and macO
   the project URL and bare conversation ID returned identical message bodies, without creating
   managed research jobs. The source wasn't enrolled in deletion. Unit/API tests cover retry
   identity, scope isolation, Unicode pagination, partial batch results, durability, and retention.
+- Full-transcript links verified for both imports and managed threads. The installed plugin discovers
+  OpenCode's temporary directory and publishes Markdown copies there; a parent-session read succeeded
+  without an external-directory approval. Deleting a temporary copy and retrieving again regenerated
+  identical content. Existing generated JSON exports were removed after Markdown verification.
 - Logged-in Search request with account-default model and verified Extra High selection. Captured
   the complete answer, Markdown, and source links while minimized. Observation-only reconciliation
   recovered the original request without resending; exactly one prompt was consumed.
@@ -36,7 +40,7 @@ Implementation target: OpenCode 2.0.8, installed Google Chrome, Windows and macO
   tab creation and reconnect. Both opt-in real-Chrome DOM fixtures pass, including High fallback
   when Extra High is unavailable and preserving the Search pill during composer input.
 - Smoke conversation deleted through ChatGPT's UI; its explicit deleted-conversation notice was
-  verified on reopening the saved URL. Local Markdown and JSON archives were verified afterward.
+  verified on reopening the saved URL. Local archives were verified afterward; exports are now Markdown-only.
 - Actual `web-researcher` installed in this repository completed two Search prompts in one thread,
   with Extra High selected for each and eight prompts remaining. Verified stored requests against
   the OpenCode tool trace, normal pacing, exact prompt texts, and complete responses with citations.

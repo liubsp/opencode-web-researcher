@@ -107,7 +107,11 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
                 now(),
             )?;
             state.notify.notify_one();
-            Ok(request.summary())
+            Ok(crate::transcripts::imported(
+                &state.store.lock().unwrap(),
+                &state.dir,
+                &request,
+            ))
         }
         "get" | "wait" => {
             let job = scoped_job(state, &input)?;
@@ -130,8 +134,10 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
             }
             let job = scoped_job(state, &input)?;
             let thread = state.store.lock().unwrap().thread(&job.thread_id)?;
+            let local_transcript =
+                crate::transcripts::managed(&state.store.lock().unwrap(), &state.dir, &thread);
             Ok(
-                json!({"request":job,"remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":30}),
+                json!({"request":job,"remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":30,"local_transcript":local_transcript}),
             )
         }
         "list" => {
@@ -177,7 +183,10 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
                 thread.active_at = now();
                 store.save_thread(&thread)?;
             }
-            Ok(json!({"thread":thread,"requests":store.jobs(&thread.id)?}))
+            let local_transcript = crate::transcripts::managed(&store, &state.dir, &thread);
+            Ok(
+                json!({"thread":thread,"requests":store.jobs(&thread.id)?,"local_transcript":local_transcript}),
+            )
         }
         "cancel" => {
             let job = scoped_job(state, &input)?;
@@ -278,16 +287,23 @@ async fn read_operation(state: &State, input: &Value) -> Result<Value> {
             let total = markdown.chars().count();
             ensure!(offset <= total, "Offset exceeds transcript length");
             let end = (offset + limit).min(total);
+            let summary =
+                crate::transcripts::imported(&state.store.lock().unwrap(), &state.dir, &request);
             return Ok(
                 json!({"id":request.id,"chat_index":index,"chat_id":result["chat_id"],"source_url":result["source_url"],
                 "captured_at":result["captured_at"],"coverage":result["coverage"],"limitations":result["limitations"],
                 "offset":offset,"total_chars":total,"next_offset":if end < total {Some(end)} else {None},
-                "markdown":markdown.chars().skip(offset).take(limit).collect::<String>()}),
+                "markdown":markdown.chars().skip(offset).take(limit).collect::<String>(),
+                "local_transcript":summary["results"][index]["local_transcript"]}),
             );
         }
         _ => {}
     }
-    Ok(request.summary())
+    Ok(crate::transcripts::imported(
+        &state.store.lock().unwrap(),
+        &state.dir,
+        &request,
+    ))
 }
 
 #[cfg(test)]
@@ -353,6 +369,10 @@ mod tests {
         assert_eq!(page["markdown"], "你好👋");
         assert_eq!(page["next_offset"], 4);
         assert_eq!(page["total_chars"], 5);
+        let imported_path = page["local_transcript"]["markdown"]["path"]
+            .as_str()
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(imported_path)?, "A你好👋Z");
         assert!(
             crate::client::rpc(
                 &descriptor,
@@ -401,6 +421,10 @@ mod tests {
         .await?;
         assert_eq!(waited["request"]["state"], "queued");
         assert_eq!(waited["remaining_prompts"], 9);
+        let thread_path = waited["local_transcript"]["markdown"]["path"]
+            .as_str()
+            .unwrap();
+        assert!(std::fs::read_to_string(thread_path)?.contains("check official docs pls"));
         crate::client::rpc(
             &descriptor,
             json!({"op":"cancel","project":"a","id":one["id"]}),

@@ -59,8 +59,14 @@ fn archive_is_durable_and_retirement_retries_preserve_it() -> Result<()> {
         .join(&thread.id)
         .join("thread.md");
     assert!(std::fs::read_to_string(&path)?.contains("https://example.org"));
+    let legacy = path.with_extension("json");
+    std::fs::write(&legacy, serde_json::to_vec(&job)?)?;
+    store.archive(&thread, dir.path())?;
+    assert!(!legacy.exists());
     std::fs::write(&path, "modified archive")?;
+    std::fs::write(&legacy, serde_json::to_vec(&job)?)?;
     assert!(store.archive(&thread, dir.path()).is_err());
+    assert!(legacy.exists()); // Verification failure must not discard the previous export.
     Ok(())
 }
 
@@ -101,15 +107,15 @@ fn each_exchange_is_saved_before_retirement_and_recovers_from_database() -> Resu
         .join("transcripts")
         .join(&first.thread_id)
         .join(&first.id);
-    assert!(folder.join("prompt.json").exists());
-    assert!(!folder.join("exchange.json").exists());
+    assert!(folder.join("prompt.md").exists());
+    assert!(!folder.join("exchange.md").exists());
     first.response = Some(serde_json::json!({"markdown":"first answer"}));
     store.finish(&mut first, "completed", None, 20)?;
     // Simulate shutdown after SQLite commit, before the file export. Recovery needs no browser.
     drop(store);
     let mut store = Store::open(&db)?;
     store.checkpoint(&store.job(&first.id)?, dir.path())?;
-    let bytes = std::fs::read(folder.join("exchange.json"))?;
+    let bytes = std::fs::read(folder.join("exchange.md"))?;
     assert!(std::fs::read_to_string(folder.join("exchange.md"))?.contains("first answer"));
     let mut second = store.submit(
         &input("second", Some(first.thread_id.clone())),
@@ -120,7 +126,14 @@ fn each_exchange_is_saved_before_retirement_and_recovers_from_database() -> Resu
     store.finish(&mut second, "completed", None, 30)?;
     store.checkpoint(&second, dir.path())?;
     store.checkpoint(&first, dir.path())?;
-    assert_eq!(std::fs::read(folder.join("exchange.json"))?, bytes);
+    assert_eq!(std::fs::read(folder.join("exchange.md"))?, bytes);
+    let full = std::fs::read_to_string(
+        dir.path()
+            .join("transcripts")
+            .join(&first.thread_id)
+            .join("thread.md"),
+    )?;
+    assert!(full.contains("first answer") && full.contains("second answer"));
     assert_eq!(store.thread(&first.thread_id)?.state, "active");
     Ok(())
 }

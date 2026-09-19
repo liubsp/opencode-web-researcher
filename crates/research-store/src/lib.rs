@@ -289,14 +289,6 @@ impl Store {
         );
         let folder = dir.join("archives").join(&thread.id);
         std::fs::create_dir_all(&folder)?;
-        let mut archived_thread = thread.clone();
-        archived_thread.state = "archived".into();
-        archived_thread.cleanup_error = None;
-        archived_thread.cleanup_attempts = 0;
-        archived_thread.cleanup_retry_at = 0;
-        let json = serde_json::to_vec_pretty(
-            &serde_json::json!({"thread":archived_thread,"requests":jobs}),
-        )?;
         let mut markdown = format!("# {}\n\nThread: {}\n\n", thread.title, thread.id);
         for job in &jobs {
             markdown.push_str(&format!(
@@ -309,24 +301,44 @@ impl Store {
                     .unwrap_or("[No complete response captured]")
             ));
         }
-        for (name, bytes) in [("thread.json", json), ("thread.md", markdown.into_bytes())] {
-            let path = folder.join(name);
-            // Write-once archives: retries verify existing bytes instead of replacing durable content.
-            if path.exists() {
-                ensure!(
-                    transcript_matches(&path, &std::fs::read(&path)?, &bytes),
-                    "Archive differs from persisted transcript: {}",
-                    path.display()
-                );
-            } else {
-                use std::io::Write;
-                let tmp = folder.join(format!("{name}.tmp"));
-                let mut file = std::fs::File::create(&tmp)?;
-                file.write_all(&bytes)?;
-                file.sync_all()?;
-                std::fs::rename(tmp, path)?;
-            }
+        write_once(&folder.join("thread.md"), markdown.as_bytes())?;
+        remove_legacy_json(&folder.join("thread.json"))?;
+        Ok(())
+    }
+
+    /// Refresh the combined locally captured thread without freezing or retiring it.
+    pub fn export_thread(&self, thread: &Thread, dir: &Path) -> Result<()> {
+        let jobs = self.jobs(&thread.id)?;
+        let folder = dir.join("transcripts").join(&thread.id);
+        std::fs::create_dir_all(&folder)?;
+        let mut markdown = format!(
+            "# {}\n\nThread: {}\nSource: {}\n\nCaptured managed-thread history; pending responses may be partial.\n\n",
+            thread.title,
+            thread.id,
+            thread.url.as_deref().unwrap_or("Not submitted yet")
+        );
+        for job in &jobs {
+            markdown.push_str(&format!(
+                "## User\n\n{}\n\n## ChatGPT ({})\n\n{}\n\n",
+                job.prompt,
+                job.state,
+                job.response
+                    .as_ref()
+                    .and_then(|r| r["markdown"].as_str())
+                    .unwrap_or("[No response captured]")
+            ));
         }
+        let bytes = markdown.into_bytes();
+        let path = folder.join("thread.md");
+        if !std::fs::read(&path).is_ok_and(|saved| saved == bytes) {
+            use std::io::Write;
+            let tmp = path.with_extension("tmp");
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            std::fs::rename(tmp, path)?;
+        }
+        remove_legacy_json(&folder.join("thread.json"))?;
         Ok(())
     }
 
@@ -334,13 +346,9 @@ impl Store {
     pub fn checkpoint(&self, job: &Job, dir: &Path) -> Result<()> {
         let folder = dir.join("transcripts").join(&job.thread_id).join(&job.id);
         std::fs::create_dir_all(&folder)?;
-        let prompt = serde_json::to_vec_pretty(&serde_json::json!({
-            "request_id":job.id,"thread_id":job.thread_id,"prompt":job.prompt,
-            "created_at":job.created_at
-        }))?;
-        write_once(&folder.join("prompt.json"), &prompt)?;
+        write_once(&folder.join("prompt.md"), job.prompt.as_bytes())?;
+        remove_legacy_json(&folder.join("prompt.json"))?;
         if job.terminal() {
-            let json = serde_json::to_vec_pretty(job)?;
             let markdown = format!(
                 "## User\n\n{}\n\n## ChatGPT ({})\n\n{}\n",
                 job.prompt,
@@ -350,9 +358,10 @@ impl Store {
                     .and_then(|r| r["markdown"].as_str())
                     .unwrap_or("[No response captured]")
             );
-            write_once(&folder.join("exchange.json"), &json)?;
             write_once(&folder.join("exchange.md"), markdown.as_bytes())?;
+            remove_legacy_json(&folder.join("exchange.json"))?;
         }
+        self.export_thread(&self.thread(&job.thread_id)?, dir)?;
         Ok(())
     }
 
@@ -384,61 +393,18 @@ impl Store {
     }
 }
 
-// Normalize only known config metadata, never prompts, responses, or unknown fields.
-fn transcript_matches(path: &Path, saved: &[u8], current: &[u8]) -> bool {
-    if saved == current {
-        return true;
-    }
-    if path.extension().is_none_or(|ext| ext != "json") {
-        return false;
-    }
-    fn normalize_job(job: &mut serde_json::Value) {
-        let Some(config) = job
-            .get_mut("config")
-            .and_then(serde_json::Value::as_object_mut)
-        else {
-            return;
-        };
-        for (old, new) in [
-            ("inactivity_hours", "remote_chat_inactivity_hours"),
-            (
-                "transcript_retention_days",
-                "local_transcript_retention_days",
-            ),
-        ] {
-            if !config.contains_key(new)
-                && let Some(value) = config.remove(old)
-            {
-                config.insert(new.into(), value);
-            }
-        }
-        if config.get("local_transcript_retention_days") == Some(&serde_json::json!(30)) {
-            config.remove("local_transcript_retention_days");
-        }
-    }
-    fn normalize(bytes: &[u8]) -> Option<serde_json::Value> {
-        let mut value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-        normalize_job(&mut value);
-        if let Some(requests) = value
-            .get_mut("requests")
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            for job in requests {
-                normalize_job(job);
-            }
-        }
-        Some(value)
-    }
-    match (normalize(saved), normalize(current)) {
-        (Some(saved), Some(current)) => saved == current,
-        _ => false,
+fn remove_legacy_json(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
 fn write_once(path: &Path, bytes: &[u8]) -> Result<()> {
     if path.exists() {
         ensure!(
-            transcript_matches(path, &std::fs::read(path)?, bytes),
+            std::fs::read(path)? == bytes,
             "Saved transcript differs: {}",
             path.display()
         );
@@ -456,27 +422,6 @@ fn write_once(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn transcript_config_aliases_preserve_integrity() {
-        let old = br#"{"config":{"inactivity_hours":24},"response":{"markdown":"saved"}}"#;
-        let new = br#"{"config":{"remote_chat_inactivity_hours":24,"local_transcript_retention_days":30},"response":{"markdown":"saved"}}"#;
-        assert!(transcript_matches(Path::new("exchange.json"), old, new));
-        let changed =
-            br#"{"config":{"remote_chat_inactivity_hours":24},"response":{"markdown":"changed"}}"#;
-        assert!(!transcript_matches(
-            Path::new("exchange.json"),
-            old,
-            changed
-        ));
-        assert!(!transcript_matches(Path::new("exchange.md"), old, new));
-        let archive_old = format!("{{\"requests\":[{}]}}", std::str::from_utf8(old).unwrap());
-        let archive_new = format!("{{\"requests\":[{}]}}", std::str::from_utf8(new).unwrap());
-        assert!(transcript_matches(
-            Path::new("thread.json"),
-            archive_old.as_bytes(),
-            archive_new.as_bytes()
-        ));
-    }
     fn input(key: &str, thread: Option<String>) -> Submit {
         Submit {
             project: "project-a".into(),
@@ -539,7 +484,7 @@ mod tests {
             dir.path()
                 .join("archives")
                 .join(thread.id)
-                .join("thread.json")
+                .join("thread.md")
                 .exists()
         );
         Ok(())

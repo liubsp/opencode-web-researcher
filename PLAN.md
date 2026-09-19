@@ -152,7 +152,7 @@ A periodic worker retires threads after 24 hours of inactivity. A thread also re
 
 Retirement is an archive-before-delete workflow:
 
-1. Save the captured transcript, prompts, replies, citations, timestamps, model/level, errors, and partial-result markers to SQLite and atomically export readable Markdown plus structured JSON under the user data directory (`archives/<thread-id>/`). Capture any recoverable final content from the owned conversation before deletion.
+1. Save structured conversation data to SQLite and atomically export readable Markdown under the user data directory (`archives/<thread-id>/`). Verify that Markdown against SQLite before deletion. Publish disposable Markdown copies in OpenCode's reported temporary directory for parent-agent reads and final-report links; JSON exports are unnecessary.
 2. Verify the durable archive/export succeeded. An archive failure prevents remote deletion and is surfaced for retry.
 3. Delete that exact tracked conversation using ChatGPT's UI; verify the result before marking `remote_deleted`. No bulk deletion and no unrelated conversations.
 4. Close its owned tab and remove it from the active list. Keep transcripts and database history for 30 days since last activity by default, then purge both after confirmed remote cleanup. Retain active, unresolved, and deletion-pending work. Provide explicit saved-history list/read operations during retention.

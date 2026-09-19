@@ -14,7 +14,7 @@ export function tools(project: string, call: Call): Info[] {
       input: object({ thread_id: id, prompt: text, request_key: id }, ["thread_id", "prompt", "request_key"]) },
     { name: "wait", description: "Wait patiently for an existing request. Repeat while pending, without resubmitting. Queue/composition time is additional to 1–10 minute Search; Deep Research can take longer.",
       input: object({ id, seconds: { type: "integer", minimum: 1, maximum: 60, default: 60 } }, ["id"]) },
-    { name: "get", description: "Read request state, partial/final response and remaining prompt budget; for read-only imports, returns per-chat result metadata for research_read_content.", input: object({ id }, ["id"]) },
+    { name: "get", description: "Read request state, response/budget or imported-chat metadata. Includes local_transcript absolute paths and file URLs; include these full-transcript links in the final report.", input: object({ id }, ["id"]) },
     { name: "list", description: "List this project's active research chats, or locally saved transcripts when requested. This does not list ChatGPT's archived chats.",
       input: object({ archived: { type: "boolean" }, all_projects: { type: "boolean" } }) },
     { name: "resume", description: "Resume an unexpired thread by ID without sending a prompt. Never use a replacement thread to evade its prompt limit.", input: object({ id }, ["id"]) },

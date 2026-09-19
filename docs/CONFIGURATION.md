@@ -30,8 +30,9 @@ inherit the same value. This selects a different data directory, including its p
 
 ## Imported source chats
 
+
 Read-only source captures live in the separate `chat_reads` SQLite table and
-`imports/<read-request-id>/<chat-index>.json` / `.md`. They never become managed research threads,
+`imports/<read-request-id>/<chat-index>.md`. They never become managed research threads,
 consume prompt reservations, or enter remote deletion. Completed/cancelled batches expire after
 `local_transcript_retention_days` since their last captured result; pending batches are retained.
 Saving and retrieval are project-scoped. The researcher returns paginated Markdown and provenance
@@ -78,10 +79,10 @@ files, and memory may influence the answer.
 ## Transcripts and cleanup
 
 The data directory holds `state.sqlite`, the separate Chrome profile, service/browser records,
-and saved transcripts at `archives/<thread-id>/thread.md` and `thread.json`.
+and saved transcripts at `archives/<thread-id>/thread.md`. Structured data stays in SQLite.
 
-Prompts are saved before sending at `transcripts/<thread-id>/<request-id>/prompt.json`. Each completed
-exchange is saved alongside it as `exchange.md` and `exchange.json`, while the chat is still active.
+Prompts are saved before sending at `transcripts/<thread-id>/<request-id>/prompt.md`. Each completed
+exchange is saved alongside it as `exchange.md`, while the chat is still active.
 Captured partial responses also persist in SQLite. Missing exports are retried from that database
 after a restart or temporary disk failure; they don't require the ChatGPT conversation to exist.
 
