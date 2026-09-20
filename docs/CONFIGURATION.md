@@ -22,8 +22,8 @@ inherit the same value. This selects a different data directory, including its p
   "words_per_minute": 40,
   "fixed_pause_seconds": 15,
   "pause_jitter_seconds": 30,
-  "remote_chat_inactivity_hours": 24,
-  "remote_chat_inactivity_max_hours": 168,
+  "chat_deletion_delay_min_hours": 24,
+  "chat_deletion_delay_max_hours": 168,
   "local_transcript_retention_days": 30,
   "search_timeout_seconds": 900,
   "deep_research_timeout_seconds": 1800,
@@ -108,8 +108,8 @@ Deleting a conversation manually in ChatGPT doesn't delete local records. An ans
 it was captured cannot be recovered; resume/follow-up operations may fail for a deleted chat.
 
 Each managed chat expires after a random 1–7 days of inactivity, or after the tenth response.
-`remote_chat_inactivity_hours` sets the lower bound (default 24 hours), and
-`remote_chat_inactivity_max_hours` sets the upper bound (default 168 hours). Both are inclusive,
+`chat_deletion_delay_min_hours` sets the lower bound (default 24 hours), and
+`chat_deletion_delay_max_hours` sets the upper bound (default 168 hours). Both are inclusive,
 must be between 1 and 8760 hours, and the maximum must be at least the minimum. Equal bounds
 give a fixed delay. Changing either setting recalculates eligibility for active chats.
 The offset is derived from the chat's persisted random ID, so polling and restarts don't redraw it.
@@ -119,7 +119,9 @@ for cleanup; spacing and failed-deletion retries may delay actual removal.
 The service verifies a final full transcript before deleting the conversation.
 This isn't ChatGPT's **Archive chat** feature.
 
-The old config keys `inactivity_hours` and `transcript_retention_days` remain accepted as aliases.
+The old keys `remote_chat_inactivity_hours`, `remote_chat_inactivity_min_hours`, and `inactivity_hours`
+remain aliases for the minimum; `remote_chat_inactivity_max_hours` remains an alias for the maximum.
+`transcript_retention_days` remains an alias for local retention.
 Local copies expire after `local_transcript_retention_days` (default 30) since last thread activity, once remote
 deletion is confirmed. Both files and database history are removed, so exports cannot recreate them.
 Pending remote deletion is retained. Listing and polling don't extend inactivity; active or

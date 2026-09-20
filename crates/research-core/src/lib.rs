@@ -48,10 +48,16 @@ pub struct Config {
     pub fixed_pause_seconds: u64,
     #[serde(skip_serializing_if = "default_retention")]
     pub pause_jitter_seconds: u64,
-    #[serde(rename = "remote_chat_inactivity_hours", alias = "inactivity_hours")]
+    #[serde(
+        rename = "chat_deletion_delay_min_hours",
+        alias = "remote_chat_inactivity_min_hours",
+        alias = "remote_chat_inactivity_hours",
+        alias = "inactivity_hours"
+    )]
     pub inactivity_hours: u64,
     #[serde(
-        rename = "remote_chat_inactivity_max_hours",
+        rename = "chat_deletion_delay_max_hours",
+        alias = "remote_chat_inactivity_max_hours",
         skip_serializing_if = "default_inactivity_max"
     )]
     pub inactivity_max_hours: u64,
@@ -123,11 +129,11 @@ impl Config {
         );
         ensure!(
             (1..=8760).contains(&self.inactivity_hours),
-            "remote_chat_inactivity_hours must be 1..8760"
+            "chat_deletion_delay_min_hours must be 1..8760"
         );
         ensure!(
             (self.inactivity_hours..=8760).contains(&self.inactivity_max_hours),
-            "remote_chat_inactivity_max_hours must be between remote_chat_inactivity_hours and 8760"
+            "chat_deletion_delay_max_hours must be between chat_deletion_delay_min_hours and 8760"
         );
         ensure!(!self.model.trim().is_empty(), "model is empty");
         ensure!(
