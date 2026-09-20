@@ -41,13 +41,13 @@ and removal.
 **Windows · PowerShell**
 
 ```powershell
-& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\web-research-server.exe" login
+& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\opencode-web-researcher.exe" login
 ```
 
 **macOS**
 
 ```sh
-"$HOME/Library/Application Support/opencode-web-researcher/app/bin/web-research-server" login
+"$HOME/Library/Application Support/opencode-web-researcher/app/bin/opencode-web-researcher" login
 ```
 
 Sign in to ChatGPT in the window that opens, then reload your OpenCode project. This profile is

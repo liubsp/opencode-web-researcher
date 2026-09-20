@@ -8,7 +8,7 @@ export default Plugin.define({
   id: "web-research",
   async setup(ctx) {
     const binary = typeof ctx.options.binary === "string" ? ctx.options.binary : process.env.WEB_RESEARCH_BINARY;
-    if (!binary) throw new Error("web-research: run the project installer with --binary pointing to web-research");
+    if (!binary) throw new Error("web-research: run the project installer with --binary pointing to opencode-web-researcher");
     const client = new ResearchClient(binary);
     // Resolve lazily: a failed temp export must not prevent registration or research work.
     let temporary: Promise<string> | undefined;

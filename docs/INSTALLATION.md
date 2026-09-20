@@ -41,18 +41,18 @@ Upgrades reuse an existing `web-research-opencode` data directory. Use the serve
 installer for login and removal commands below. Rerun setup in each registered location to replace
 the old package registration with `opencode-web-researcher`.
 
-Inside it, the server lives at `app/bin/web-research-server.exe` on Windows or
-`app/bin/web-research-server` on macOS. The plugin lives at
+Inside it, the server lives at `app/bin/opencode-web-researcher.exe` on Windows or
+`app/bin/opencode-web-researcher` on macOS. The plugin lives at
 `app/runtime/node_modules/opencode-web-researcher`.
 
 Sign in once:
 
 ```powershell
-& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\web-research-server.exe" login
+& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\opencode-web-researcher.exe" login
 ```
 
 ```sh
-"$HOME/Library/Application Support/opencode-web-researcher/app/bin/web-research-server" login
+"$HOME/Library/Application Support/opencode-web-researcher/app/bin/opencode-web-researcher" login
 ```
 
 This opens a separate Chrome profile. Your everyday Chrome login isn't inherited.
@@ -110,15 +110,15 @@ npm run build
 Then register it in a target repo:
 
 ```powershell
-node packages/opencode-plugin/dist/install.js --project "C:\projects\my-app" --binary "C:\tools\opencode-web-researcher\target\release\web-research.exe"
+node packages/opencode-plugin/dist/install.js --project "C:\projects\my-app" --binary "C:\tools\opencode-web-researcher\target\release\opencode-web-researcher.exe"
 ```
 
 ```sh
-node packages/opencode-plugin/dist/install.js --project /path/to/my-app --binary /path/to/opencode-web-researcher/target/release/web-research
+node packages/opencode-plugin/dist/install.js --project /path/to/my-app --binary /path/to/opencode-web-researcher/target/release/opencode-web-researcher
 ```
 
-Source builds use the executable name `web-research`; bootstrap installations name it
-`web-research-server`. Both accept the same commands. Debug builds also work for development.
+Source builds and bootstrap installations both use `opencode-web-researcher` (`.exe` on Windows).
+Debug builds also work for development.
 Keep the checkout and executable at their registered paths when using this installation method.
 
 CI packages an executable and npm tarball. To use those, install the tarball in a permanent tools
@@ -126,7 +126,7 @@ directory and run its setup command with absolute paths:
 
 ```sh
 npm install /path/to/opencode-web-researcher-0.1.0.tgz
-npx --no-install web-research-setup --project /path/to/my-app --binary /path/to/web-research-server
+npx --no-install web-research-setup --project /path/to/my-app --binary /path/to/opencode-web-researcher
 ```
 
 Prebuilt binaries don't need Rust. This package hasn't been published to npm.
@@ -146,12 +146,12 @@ research aren't deleted. Remove any separate global or per-repo registrations as
 To remove the shared app, first unregister it everywhere, then stop the server and delete `app`:
 
 ```powershell
-& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\web-research-server.exe" shutdown
+& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\opencode-web-researcher.exe" shutdown
 Remove-Item -LiteralPath "$env:LOCALAPPDATA\opencode-web-researcher\app" -Recurse -Force
 ```
 
 ```sh
-"$HOME/Library/Application Support/opencode-web-researcher/app/bin/web-research-server" shutdown
+"$HOME/Library/Application Support/opencode-web-researcher/app/bin/opencode-web-researcher" shutdown
 rm -rf "$HOME/Library/Application Support/opencode-web-researcher/app"
 ```
 

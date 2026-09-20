@@ -17,7 +17,7 @@ if [[ -n "$project" ]]; then project="$(cd "$project" && pwd)"; fi
 mkdir -p "$root"
 mkdir "$root/install.lock.d" 2>/dev/null || { echo 'Another installation is running (or a stale install.lock.d needs review)' >&2; exit 1; }
 stage="$(mktemp -d)"
-server="$root/bin/web-research-server"
+server="$root/bin/opencode-web-researcher"
 restart=false
 cleanup() {
   if $restart && [[ -x "$server" ]]; then "$server" connect >/dev/null 2>&1 || true; fi
@@ -35,12 +35,12 @@ tar -xzf "$stage/source.tar.gz" --strip-components=1 -C "$stage/source"
   npm run build
   npm pack --workspace opencode-web-researcher --pack-destination "$stage"
 )
-if "$stage/source/target/release/web-research" status >/dev/null 2>&1; then
+if "$stage/source/target/release/opencode-web-researcher" status >/dev/null 2>&1; then
   restart=true
-  "$stage/source/target/release/web-research" shutdown
+  "$stage/source/target/release/opencode-web-researcher" shutdown
 fi
 mkdir -p "$root/bin" "$root/runtime"
-cp "$stage/source/target/release/web-research" "$server.new"
+cp "$stage/source/target/release/opencode-web-researcher" "$server.new"
 chmod +x "$server.new"
 mv -f "$server.new" "$server"
 npm install --prefix "$root/runtime" --omit=dev --no-audit --no-fund "$stage/"*.tgz

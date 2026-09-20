@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { ResearchClient } from "../packages/opencode-plugin/dist/client.js";
 
 if (process.env.WEB_RESEARCH_LIVE !== "1") throw new Error("Set WEB_RESEARCH_LIVE=1 to run this account integration test");
-const binary = resolve("target/debug", process.platform === "win32" ? "web-research.exe" : "web-research");
+const binary = resolve("target/debug", process.platform === "win32" ? "opencode-web-researcher.exe" : "opencode-web-researcher");
 const client = new ResearchClient(binary);
 const file = resolve("target/live-smoke.json");
 const project = "web-research-live-smoke";

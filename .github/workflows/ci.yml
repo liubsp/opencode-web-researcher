@@ -34,8 +34,8 @@ jobs:
         with:
           name: opencode-web-researcher-${{ runner.os }}-${{ runner.arch }}
           path: |
-            target/release/web-research
-            target/release/web-research.exe
+            target/release/opencode-web-researcher
+            target/release/opencode-web-researcher.exe
             opencode-web-researcher-*.tgz
             README.md
             LICENSE

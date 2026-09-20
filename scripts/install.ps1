@@ -23,7 +23,7 @@ $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
 $lock = [IO.File]::Open((Join-Path $InstallDir 'install.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('web-research-install-' + [guid]::NewGuid())
-$server = Join-Path $InstallDir 'bin\web-research-server.exe'
+$server = Join-Path $InstallDir 'bin\opencode-web-researcher.exe'
 $runtime = Join-Path $InstallDir 'runtime'
 $restart = $false
 try {
@@ -44,7 +44,7 @@ try {
     } finally { Pop-Location }
     $package = (Get-ChildItem $stage -Filter '*.tgz' | Select-Object -First 1).FullName
     # Build succeeds before interrupting the installed daemon.
-    $candidate = Join-Path $source 'target\release\web-research.exe'
+    $candidate = Join-Path $source 'target\release\opencode-web-researcher.exe'
     if (Test-Path $candidate) {
         & $candidate status *> $null
         $restart = $LASTEXITCODE -eq 0
@@ -53,7 +53,7 @@ try {
     New-Item -ItemType Directory -Force (Split-Path $server),$runtime | Out-Null
     $copied = $false
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        try { Copy-Item (Join-Path $source 'target\release\web-research.exe') $server -Force; $copied = $true; break }
+        try { Copy-Item $candidate $server -Force; $copied = $true; break }
         catch { Start-Sleep -Seconds 1 }
     }
     if (-not $copied) { throw 'Server executable remains busy; retry after active requests finish' }

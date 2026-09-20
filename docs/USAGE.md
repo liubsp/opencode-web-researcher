@@ -51,16 +51,15 @@ for file locations, backups, and retention.
 
 ## When something goes wrong
 
-Use the installed server's full path, or put its directory on PATH. These commands also work
-with the source-build executable named `web-research`:
+Use the installed server's full path, or put its directory on PATH. Source builds use the same name:
 
 ```sh
-web-research-server doctor
-web-research-server status
-web-research-server browser-check
-web-research-server browser-inspect
-web-research-server login
-web-research-server shutdown
+opencode-web-researcher doctor
+opencode-web-researcher status
+opencode-web-researcher browser-check
+opencode-web-researcher browser-inspect
+opencode-web-researcher login
+opencode-web-researcher shutdown
 ```
 
 - **Agent missing:** check the installed Markdown file and reload the correct OpenCode location.

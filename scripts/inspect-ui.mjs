@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-const binary = resolve("target/debug", process.platform === "win32" ? "web-research.exe" : "web-research");
+const binary = resolve("target/debug", process.platform === "win32" ? "opencode-web-researcher.exe" : "opencode-web-researcher");
 const { data_directory } = JSON.parse(execFileSync(binary, ["doctor"], {encoding:"utf8"}));
 const record = JSON.parse(await readFile(resolve(data_directory,"chrome.json"),"utf8"));
 const targets = await (await fetch(`http://127.0.0.1:${record.port}/json/list`)).json();

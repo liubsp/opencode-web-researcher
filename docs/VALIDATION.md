@@ -62,7 +62,7 @@ the conversation appeared under that project in the sidebar. The migrated login 
 
 The Windows bootstrap installer was exercised from a local source checkout: release build, npm
 pack/install, stable per-user paths, project setup, daemon shutdown and restart all completed.
-The installed `web-research-server` health check and global-plugin reload passed. The remote-download
+The installed server health check and global-plugin reload passed. The remote-download
 one-liner and macOS bootstrap still need separate verification.
 
 - Optional Deep Research end-to-end flow, including clarification and long report completion.
