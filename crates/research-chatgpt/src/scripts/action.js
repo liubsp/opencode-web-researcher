@@ -72,6 +72,11 @@
   if (op === 'send') return click(document.querySelector('[data-testid="send-button"], #composer-submit-button'));
   if (op === 'start_report') return click(find(/^start research$/i));
   if (op === 'open_chat_menu') {
+    // Project chats may be absent from the sidebar's truncated history. The header
+    // menu belongs to the open conversation, so require the exact saved URL first.
+    if (location.href.split('?')[0] !== argument) return {ok:false,error:'deletion_target_changed'};
+    const header = document.querySelector('[data-testid="conversation-options-button"]');
+    if (visible(header)) return click(header);
     const link = [...document.querySelectorAll('a[href]')].find(a => a.href.split('?')[0] === argument);
     const row = link?.closest('[data-testid]') || link?.parentElement;
     const button = row?.querySelector('button[data-testid*="options"], button[aria-haspopup="menu"]');

@@ -348,7 +348,7 @@ async fn cleanup(state: &State) -> Result<()> {
             thread.state = "deletion_pending".into();
             store.save_thread(&thread)?;
         }
-        let result = retire_remote(state, &thread, &config).await;
+        let result = retire_remote(state, &mut thread, &config).await;
         match result {
             Ok(()) => {
                 thread.state = "remote_deleted".into();
@@ -379,7 +379,7 @@ fn schedule_cleanup_retry(thread: &mut Thread) {
     thread.cleanup_retry_at = now() + cleanup_delay(thread.cleanup_attempts);
 }
 
-async fn retire_remote(state: &State, thread: &Thread, config: &Config) -> Result<()> {
+async fn retire_remote(state: &State, thread: &mut Thread, config: &Config) -> Result<()> {
     if let Some(url) = &thread.url {
         let chrome = Chrome::ensure(&state.dir, config).await?;
         let mut page = match chrome.reconnect(thread.target.as_deref(), Some(url)).await {
@@ -388,6 +388,9 @@ async fn retire_remote(state: &State, thread: &Thread, config: &Config) -> Resul
             // Verify the saved URL in a new background tab rather than touching a changed tab.
             Err(_) => chrome.open(url).await?,
         };
+        // Persist replacement tabs before browser work so a retry reuses them.
+        thread.target = Some(page.id.clone());
+        state.store.lock().unwrap().save_thread(thread)?;
         chatgpt::ready(&mut page).await?;
         chatgpt::delete_conversation(&mut page, url).await?;
         chrome.close(&page.id).await?;

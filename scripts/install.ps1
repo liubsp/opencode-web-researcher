@@ -46,8 +46,13 @@ try {
     # Build succeeds before interrupting the installed daemon.
     $candidate = Join-Path $source 'target\release\opencode-web-researcher.exe'
     if (Test-Path $candidate) {
-        & $candidate status *> $null
-        $restart = $LASTEXITCODE -eq 0
+        # A stopped service is normal; Windows PowerShell turns native stderr into errors.
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $candidate status *> $null
+            $restart = $LASTEXITCODE -eq 0
+        } finally { $ErrorActionPreference = $previousErrorAction }
         if ($restart) { Run $candidate @('shutdown') }
     }
     New-Item -ItemType Directory -Force (Split-Path $server),$runtime | Out-Null

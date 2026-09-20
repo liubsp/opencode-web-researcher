@@ -14,6 +14,12 @@ Implementation target: OpenCode 2.0.8, installed Google Chrome, Windows and macO
   to prevent paused answer rendering while the OS window stays minimized.
 - Real Chrome fixture: composer input/recovery, Send interaction, completion controls, Markdown/code
   and citation extraction without submitting an account message.
+- Deletion-menu fixture covers a current-chat header with no sidebar history entry, rejects a
+  different target URL, and leaves unrelated menus untouched.
+- Installed-daemon cleanup recovered four blocked project-chat deletions. Header lookup works
+  when sidebar history omits the chat; toast-free redirects are verified by reopening the exact
+  saved URL for an explicit deleted-conversation notice. All four retained local Markdown archives.
+  Replacement cleanup tab IDs persist across retries. One-chat-per-pass spacing remains enabled.
 - OpenCode project-local plugin loads as active; its installed agent is discovered. Live agent
   registry showed research permission denied for built-in agents and allowed for the research agent
   (then named `web-research`, now renamed to `web-researcher`).
@@ -42,7 +48,7 @@ Implementation target: OpenCode 2.0.8, installed Google Chrome, Windows and macO
   the complete answer, Markdown, and source links while minimized. Observation-only reconciliation
   recovered the original request without resending; exactly one prompt was consumed.
 - Chrome `browser-check` reports `window_state: minimized` and `webdriver: false` after background
-  tab creation and reconnect. Both opt-in real-Chrome DOM fixtures pass, including High fallback
+  tab creation and reconnect. Opt-in real-Chrome DOM fixtures pass, including High fallback
   when Extra High is unavailable and preserving the Search pill during composer input.
 - Smoke conversation deleted through ChatGPT's UI; its explicit deleted-conversation notice was
   verified on reopening the saved URL. Local archives were verified afterward; exports are now Markdown-only.

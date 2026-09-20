@@ -5,6 +5,42 @@ use serde_json::json;
 
 /// Uses actual Chromium DOM semantics without contacting ChatGPT or sending account messages.
 #[tokio::test]
+#[ignore = "Requires installed Chrome; synthetic deletion controls only"]
+async fn deletion_menu_uses_current_chat_header_without_sidebar_history() -> Result<()> {
+    let dir = research_core::data_dir()?;
+    let chrome = Chrome::ensure(&dir, &Config::load(&dir)?).await?;
+    let mut page = chrome.open("about:blank").await?;
+    let html = r##"<nav><a href="https://chatgpt.com/c/other">Other chat</a>
+      <button aria-haspopup="menu" onclick="window.wrong=true">More</button></nav>
+      <header><button data-testid="conversation-options-button" aria-label="More"
+      onclick="window.opened=(window.opened||0)+1">...</button></header>"##;
+    page.eval(&format!("document.body.innerHTML={}", json!(html)))
+        .await?;
+    let action = include_str!("../src/scripts/action.js");
+    let wrong =
+        format!("({action})({{op:'open_chat_menu',argument:'https://chatgpt.com/c/other'}})");
+    assert_eq!(page.eval(&wrong).await?["ok"], false);
+    assert_eq!(
+        page.eval("window.opened === undefined && window.wrong === undefined")
+            .await?,
+        true
+    );
+    let current = format!("({action})({{op:'open_chat_menu',argument:location.href}})");
+    assert_eq!(page.eval(&current).await?["ok"], true);
+    assert_eq!(
+        page.eval("window.opened === 1 && window.wrong === undefined")
+            .await?,
+        true
+    );
+    page.eval("document.querySelector('header').remove()")
+        .await?;
+    assert_eq!(page.eval(&current).await?["ok"], false);
+    assert_eq!(page.eval("window.wrong === undefined").await?, true);
+    chrome.close(&page.id).await?;
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "Requires installed Chrome; run explicitly for the browser compatibility check"]
 async fn extraction_and_input_against_a_chrome_fixture() -> Result<()> {
     let dir = research_core::data_dir()?;

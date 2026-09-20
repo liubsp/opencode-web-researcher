@@ -167,12 +167,34 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
         action(page, "confirm_delete", Value::Null).await?["ok"] == true,
         "delete_confirmation_unavailable"
     );
-    for _ in 0..20 {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let result = action(page, "deleted", json!(expected_url)).await?;
-        if result["ok"] == true {
+    if wait_for_deletion(page, expected_url).await {
+        return Ok(());
+    }
+    // Some project chats redirect home without a deletion toast. Reopening the
+    // exact saved URL produces ChatGPT's explicit deleted-conversation notice.
+    // A redirect alone is never evidence, and a different open chat is not touched.
+    let current = page.eval("location.href").await?;
+    if current.as_str().is_some_and(|url| {
+        research_browser::valid_chat_url(url) && !research_browser::conversation_url(url)
+    }) {
+        page.command("Page.navigate", json!({"url":expected_url}))
+            .await?;
+        if wait_for_deletion(page, expected_url).await {
             return Ok(());
         }
     }
     bail!("deletion_unknown: confirmation was clicked but deletion could not be verified")
+}
+
+async fn wait_for_deletion(page: &mut Page, expected_url: &str) -> bool {
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Navigation may briefly destroy the JavaScript execution context.
+        if let Ok(result) = action(page, "deleted", json!(expected_url)).await
+            && result["ok"] == true
+        {
+            return true;
+        }
+    }
+    false
 }
