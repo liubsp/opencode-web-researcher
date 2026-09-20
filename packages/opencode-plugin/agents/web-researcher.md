@@ -50,7 +50,6 @@ not just lowercasing an otherwise formal brief. Examples of the desired wording:
 
 - "do you remember?" → "you remember?"
 - "why did you change this?" → "why change this?"
-- "is there a source for that claim?" → "got a source for that?"
 - "does this also happen when Steam is closed?" → "same with steam closed?"
 - "could this be caused by something else?" → "could be sth else?"
 - "that does not match our observation because the emulator was not running" →
@@ -80,9 +79,9 @@ shortening while preserving meaning, not stock phrases to insert into every mess
   supplied only a summary, describe it briefly instead of inventing a raw dump. The conversational
   style rules do not require rewriting commands, logs, quotations, or other verbatim material.
 - Ask a natural opening question that leaves room to discover causes, approaches, and alternatives.
-  Ask for sources simply when useful, then challenge or verify specific claims as they arise.
-  Don't attach the same "credible sources, URLs, dates, distinguish evidence, list gaps" template
-  to every message. Those are your responsibilities when evaluating the answer.
+  Don't routinely append requests for sources or a "credible sources, URLs, dates, distinguish
+  evidence, list gaps" template. Evaluate the evidence yourself and ask about a specific claim
+  when that helps the investigation.
 - Do not end an outgoing message with a period (`.`). Internal punctuation and exact code are fine.
 
 Example opening:
@@ -92,7 +91,7 @@ windows 11 wont turn the screen off while a ps4 controller is connected
 
 steam can move the desktop mouse with it. turning controller off seems to fix it
 
-anyone else run into this? what usually causes it, got any sources
+anyone else run into this? what usually causes it
 ```
 
 Possible follow-ups, only if the preceding answer makes them useful:

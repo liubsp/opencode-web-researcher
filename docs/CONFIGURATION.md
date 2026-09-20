@@ -21,7 +21,9 @@ inherit the same value. This selects a different data directory, including its p
   "reasoning_preferences": ["Extra High", "High"],
   "words_per_minute": 40,
   "fixed_pause_seconds": 15,
+  "pause_jitter_seconds": 30,
   "remote_chat_inactivity_hours": 24,
+  "remote_chat_inactivity_max_hours": 168,
   "local_transcript_retention_days": 30,
   "search_timeout_seconds": 900,
   "deep_research_timeout_seconds": 1800,
@@ -46,7 +48,10 @@ for the parent to use in repository artifacts. See [reading existing chats](USAG
 All managed research shares one active slot, enforced by a SQLite unique constraint and the single
 daemon worker. New threads may be queued, but only the head request begins pacing after the active
 request finishes. Every outgoing prompt waits `ceil(words / words_per_minute * 60)` plus
-`fixed_pause_seconds`; neither another thread/project nor time already spent queued grants credit.
+`fixed_pause_seconds`, plus a random 0–`pause_jitter_seconds` (default 30) extra seconds per request.
+Set jitter to 0 for a fixed pause. The random offset stays stable for that request across restarts.
+This is a pre-send wait: the complete message is inserted at once, not typed character by character.
+Neither another thread/project nor time already spent queued grants credit.
 Restarting conservatively restarts the current pacing interval and refreshes its `send_after` estimate.
 Timeouts and ambiguous submissions don't authorize overlapping generations. Read-only source imports
 send no prompts and don't consume this budget.
@@ -102,8 +107,17 @@ after a restart or temporary disk failure; they don't require the ChatGPT conver
 Deleting a conversation manually in ChatGPT doesn't delete local records. An answer deleted before
 it was captured cannot be recovered; resume/follow-up operations may fail for a deleted chat.
 
-After 24 hours of inactivity or the tenth response, the service verifies a final full transcript before
-deleting the managed ChatGPT conversation. This isn't ChatGPT's **Archive chat** feature.
+Each managed chat expires after a random 1–7 days of inactivity, or after the tenth response.
+`remote_chat_inactivity_hours` sets the lower bound (default 24 hours), and
+`remote_chat_inactivity_max_hours` sets the upper bound (default 168 hours). Both are inclusive,
+must be between 1 and 8760 hours, and the maximum must be at least the minimum. Equal bounds
+give a fixed delay. Changing either setting recalculates eligibility for active chats.
+The offset is derived from the chat's persisted random ID, so polling and restarts don't redraw it.
+New activity moves the deadline forward using the same offset. Resume, follow-up admission, and
+cleanup use the same deadline, including for existing active chats. Expiry makes a chat eligible
+for cleanup; spacing and failed-deletion retries may delay actual removal.
+The service verifies a final full transcript before deleting the conversation.
+This isn't ChatGPT's **Archive chat** feature.
 
 The old config keys `inactivity_hours` and `transcript_retention_days` remain accepted as aliases.
 Local copies expire after `local_transcript_retention_days` (default 30) since last thread activity, once remote

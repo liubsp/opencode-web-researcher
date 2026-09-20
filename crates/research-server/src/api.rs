@@ -176,8 +176,7 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
                     "thread_retired"
                 );
                 ensure!(
-                    now() - thread.active_at
-                        < (Config::load(&state.dir)?.inactivity_hours * 3600) as i64,
+                    now() < thread.inactivity_deadline(&Config::load(&state.dir)?),
                     "thread_expired"
                 );
                 thread.active_at = now();

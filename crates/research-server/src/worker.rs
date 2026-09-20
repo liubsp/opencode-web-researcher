@@ -16,8 +16,7 @@ impl PacingClock {
         // On restart, conservatively compose again. During a run, wall-clock jumps cannot shorten pacing.
         if self.active.as_ref().is_none_or(|(id, _)| id != &job.id) {
             let delay = job
-                .config
-                .composition_seconds(&job.prompt)
+                .pacing_seconds()
                 .max(job.send_after.unwrap_or(wall).saturating_sub(wall).max(0) as u64);
             job.send_after = Some(wall + delay as i64);
             self.active = Some((job.id.clone(), clock + Duration::from_secs(delay)));
@@ -327,7 +326,7 @@ async fn cleanup(state: &State) -> Result<()> {
         }
         if thread.state == "active"
             && thread.prompts < 10
-            && now() - thread.active_at < (config.inactivity_hours * 3600) as i64
+            && now() < thread.inactivity_deadline(&config)
         {
             continue;
         }
@@ -502,7 +501,10 @@ mod tests {
                 prompt: "one two".into(),
                 deep_research: false,
             },
-            Config::default(),
+            Config {
+                pause_jitter_seconds: 0,
+                ..Config::default()
+            },
             10,
         )?;
         let start = Instant::now();

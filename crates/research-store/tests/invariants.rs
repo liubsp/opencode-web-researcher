@@ -14,6 +14,64 @@ fn input(key: &str, thread: Option<String>) -> Submit {
 }
 
 #[test]
+fn randomized_expiry_survives_reload_and_controls_followup_admission() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("db");
+    let config = Config {
+        inactivity_max_hours: 48,
+        ..Config::default()
+    };
+    let mut store = Store::open(&path)?;
+    let mut job = store.submit(&input("first", None), config.clone(), 10)?;
+    store.finish(&mut job, "failed", None, 20)?;
+    let thread = store.thread(&job.thread_id)?;
+    let deadline = thread.inactivity_deadline(&config);
+    let delay = deadline - thread.active_at;
+    assert!((86400..=172800).contains(&delay));
+    drop(store);
+    let mut store = Store::open(&path)?;
+    assert_eq!(
+        store.thread(&thread.id)?.inactivity_deadline(&config),
+        deadline
+    );
+    let followup = input("followup", Some(thread.id.clone()));
+    assert!(
+        store
+            .submit(&followup, config.clone(), deadline)
+            .unwrap_err()
+            .to_string()
+            .contains("thread_expired")
+    );
+    store.submit(&followup, config.clone(), deadline - 1)?;
+    let resumed = store.thread(&thread.id)?;
+    assert_eq!(resumed.inactivity_deadline(&config), deadline - 1 + delay);
+    // Deterministic boundary seeds cover both ends of the window and distinct per-chat offsets.
+    let mut sample = thread;
+    sample.id = "00000000-0000-0000-0000-000000000000".into();
+    assert_eq!(
+        sample.inactivity_deadline(&config) - sample.active_at,
+        86400
+    );
+    sample.id = "00000000-0000-0000-0000-000000015180".into();
+    assert_eq!(
+        sample.inactivity_deadline(&config) - sample.active_at,
+        172800
+    );
+    let defaults = Config::default();
+    sample.id = "00000000-0000-0000-0000-00000007e900".into();
+    assert_eq!(
+        sample.inactivity_deadline(&defaults) - sample.active_at,
+        604800
+    );
+    let fixed = Config {
+        inactivity_max_hours: 24,
+        ..defaults
+    };
+    assert_eq!(sample.inactivity_deadline(&fixed) - sample.active_at, 86400);
+    Ok(())
+}
+
+#[test]
 fn retries_cannot_change_payload_or_scope() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let mut store = Store::open(&dir.path().join("db"))?;
@@ -216,7 +274,9 @@ fn polling_does_not_refresh_ttl_and_timeouts_are_not_safe_to_archive() -> Result
             .submit(
                 &input("late", Some(job.thread_id.clone())),
                 Config::default(),
-                86404
+                store
+                    .thread(&job.thread_id)?
+                    .inactivity_deadline(&Config::default())
             )
             .is_err()
     );

@@ -46,8 +46,15 @@ pub struct Config {
     pub reasoning_preferences: Vec<String>,
     pub words_per_minute: u32,
     pub fixed_pause_seconds: u64,
+    #[serde(skip_serializing_if = "default_retention")]
+    pub pause_jitter_seconds: u64,
     #[serde(rename = "remote_chat_inactivity_hours", alias = "inactivity_hours")]
     pub inactivity_hours: u64,
+    #[serde(
+        rename = "remote_chat_inactivity_max_hours",
+        skip_serializing_if = "default_inactivity_max"
+    )]
+    pub inactivity_max_hours: u64,
     #[serde(skip_serializing_if = "default_retention")]
     #[serde(
         rename = "local_transcript_retention_days",
@@ -72,7 +79,9 @@ impl Default for Config {
             reasoning_preferences: vec!["Extra High".into(), "High".into()],
             words_per_minute: 40,
             fixed_pause_seconds: 15,
+            pause_jitter_seconds: 30,
             inactivity_hours: 24,
+            inactivity_max_hours: 168,
             transcript_retention_days: 30,
             search_timeout_seconds: 900,
             deep_research_timeout_seconds: 1800,
@@ -109,8 +118,16 @@ impl Config {
             "fixed_pause_seconds exceeds 3600"
         );
         ensure!(
+            self.pause_jitter_seconds <= 3600,
+            "pause_jitter_seconds exceeds 3600"
+        );
+        ensure!(
             (1..=8760).contains(&self.inactivity_hours),
             "remote_chat_inactivity_hours must be 1..8760"
+        );
+        ensure!(
+            (self.inactivity_hours..=8760).contains(&self.inactivity_max_hours),
+            "remote_chat_inactivity_max_hours must be between remote_chat_inactivity_hours and 8760"
         );
         ensure!(!self.model.trim().is_empty(), "model is empty");
         ensure!(
@@ -198,6 +215,23 @@ pub struct Thread {
     pub cleanup_retry_at: i64,
 }
 
+impl Thread {
+    /// The persisted random UUID supplies a stable per-chat offset: no redraw on polling/restart.
+    /// Both bounds are inclusive; equal bounds give a fixed inactivity period.
+    pub fn inactivity_deadline(&self, config: &Config) -> i64 {
+        let base = config.inactivity_hours * 3600;
+        let spread = (config.inactivity_max_hours - config.inactivity_hours) * 3600;
+        let seed = uuid::Uuid::parse_str(&self.id)
+            .map(|id| id.as_u128())
+            .unwrap_or(0);
+        self.active_at + (base + (seed % (spread as u128 + 1)) as u64) as i64
+    }
+}
+
+fn default_inactivity_max(value: &u64) -> bool {
+    *value == 168
+}
+
 fn zero_u32(value: &u32) -> bool {
     *value == 0
 }
@@ -261,6 +295,14 @@ pub struct Job {
 }
 
 impl Job {
+    pub fn pacing_seconds(&self) -> u64 {
+        let seed = uuid::Uuid::parse_str(&self.id)
+            .map(|id| id.as_u128())
+            .unwrap_or(0);
+        self.config.composition_seconds(&self.prompt)
+            + (seed % (self.config.pause_jitter_seconds as u128 + 1)) as u64
+    }
+
     pub fn terminal(&self) -> bool {
         matches!(self.state.as_str(), "completed" | "failed" | "cancelled")
     }

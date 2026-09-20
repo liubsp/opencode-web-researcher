@@ -83,10 +83,7 @@ impl Store {
             let pending: i64 = tx.query_row("SELECT count(*) FROM jobs WHERE thread_id=? AND state NOT IN ('completed','failed','cancelled')",
                 [id], |r| r.get(0))?;
             ensure!(pending == 0, "thread_busy: wait for the existing request");
-            ensure!(
-                at - thread.active_at < (config.inactivity_hours * 3600) as i64,
-                "thread_expired"
-            );
+            ensure!(at < thread.inactivity_deadline(&config), "thread_expired");
             thread
         } else {
             Thread {
@@ -231,10 +228,7 @@ impl Store {
                 .optional()?
                 .unwrap_or(0);
             job.state = "pacing".into();
-            job.send_after = Some(
-                at.max(last).max(job.created_at)
-                    + job.config.composition_seconds(&job.prompt) as i64,
-            );
+            job.send_after = Some(at.max(last).max(job.created_at) + job.pacing_seconds() as i64);
             tx.execute(
                 "UPDATE jobs SET state=?,data=? WHERE id=?",
                 params![job.state, serde_json::to_string(&job)?, job.id],

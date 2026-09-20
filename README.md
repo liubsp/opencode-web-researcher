@@ -72,11 +72,11 @@ and troubleshooting.
 
 ## What to expect
 
-Research takes time: prompts are paced at **40 words/minute plus 15 seconds**, and work is queued
+Research takes time: pre-send waits use **40 words/minute plus a 15–45-second pause**, and work is queued
 across projects. Each research chat allows up to **10 prompts**.
 
 Captured exchanges are saved locally. Chats created by the researcher are automatically deleted
-from ChatGPT after **24 hours of inactivity or the tenth response**; local history is kept for
+from ChatGPT after **a per-chat random 1–7 days of inactivity or the tenth response**; local history is kept for
 **30 days** by default. Supplied source chats aren't enrolled in this cleanup.
 
 Defaults work without configuration. To choose a ChatGPT model or project, adjust timing, or change

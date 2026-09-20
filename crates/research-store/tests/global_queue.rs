@@ -22,7 +22,19 @@ fn only_one_global_slot_and_new_threads_wait_the_entire_delay() -> Result<()> {
     let second = store.submit(&input("project-b", "two"), Config::default(), 10)?;
     let mut active = store.claim_next_job(20)?.unwrap();
     assert_eq!(active.id, first.id);
-    assert_eq!(active.send_after, Some(38)); // 3 seconds typing plus the full 15-second pause.
+    let mut sample = first.clone();
+    sample.id = "00000000-0000-0000-0000-000000000000".into();
+    assert_eq!(sample.pacing_seconds(), 18);
+    sample.id = "00000000-0000-0000-0000-00000000001e".into();
+    assert_eq!(sample.pacing_seconds(), 48);
+    assert_eq!(
+        serde_json::from_str::<research_core::Job>(&serde_json::to_string(&sample)?)
+            .unwrap()
+            .pacing_seconds(),
+        48
+    );
+    assert!((18..=48).contains(&first.pacing_seconds()));
+    assert_eq!(active.send_after, Some(20 + first.pacing_seconds() as i64));
     let mut other = Store::open(&db)?;
     assert_eq!(other.claim_next_job(500)?.unwrap().id, first.id);
     assert_eq!(other.job(&second.id)?.state, "queued");
@@ -48,12 +60,15 @@ fn only_one_global_slot_and_new_threads_wait_the_entire_delay() -> Result<()> {
     let mut restarted = Store::open(&db)?;
     let next = restarted.claim_next_job(1000)?.unwrap();
     assert_eq!(next.id, second.id);
-    assert_eq!(next.send_after, Some(1018)); // Time spent queued never prepays pacing.
+    assert_eq!(next.send_after, Some(1000 + second.pacing_seconds() as i64)); // No queue credit.
     restarted.cancel(&next.id, 1001)?;
     let third = restarted.submit(&input("project-c", "three"), Config::default(), 1001)?;
     let claimed = restarted.claim_next_job(1001)?.unwrap();
     assert_eq!(claimed.id, third.id);
-    assert_eq!(claimed.send_after, Some(1019)); // Cancellation cannot transfer a pacing credit.
+    assert_eq!(
+        claimed.send_after,
+        Some(1001 + third.pacing_seconds() as i64)
+    ); // No cancellation credit.
     Ok(())
 }
 
