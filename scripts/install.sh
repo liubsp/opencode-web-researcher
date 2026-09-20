@@ -5,7 +5,12 @@ global=false
 if [[ "$project" == --global ]]; then global=true; project=""; fi
 [[ $# -le 1 ]] || { echo 'Usage: install.sh [--global | project-directory]' >&2; exit 1; }
 ref="${WEB_RESEARCH_REF:-main}"
-root="${WEB_RESEARCH_INSTALL_DIR:-$HOME/Library/Application Support/web-research-opencode/app}"
+data_home="$HOME/Library/Application Support/opencode-web-researcher"
+if [[ -d "$HOME/Library/Application Support/web-research-opencode" ]]; then
+  data_home="$HOME/Library/Application Support/web-research-opencode"
+fi
+data_home="${WEB_RESEARCH_HOME:-$data_home}"
+root="${WEB_RESEARCH_INSTALL_DIR:-$data_home/app}"
 [[ "$(uname -s)" == Darwin ]] || { echo 'This installer supports macOS; use install.ps1 on Windows' >&2; exit 1; }
 for tool in node npm cargo curl tar; do command -v "$tool" >/dev/null; done
 if [[ -n "$project" ]]; then project="$(cd "$project" && pwd)"; fi
@@ -20,15 +25,15 @@ cleanup() {
   rmdir "$root/install.lock.d"
 }
 trap cleanup EXIT
-curl -fL "https://github.com/liubsp/web-research-opencode/archive/$ref.tar.gz" -o "$stage/source.tar.gz"
+curl -fL "https://github.com/liubsp/opencode-web-researcher/archive/$ref.tar.gz" -o "$stage/source.tar.gz"
 mkdir "$stage/source"
 tar -xzf "$stage/source.tar.gz" --strip-components=1 -C "$stage/source"
 (
   cd "$stage/source"
-  cargo build --release --locked -p research-app
+  node scripts/build-release.mjs
   npm ci
   npm run build
-  npm pack --workspace web-research-opencode --pack-destination "$stage"
+  npm pack --workspace opencode-web-researcher --pack-destination "$stage"
 )
 if "$stage/source/target/release/web-research" status >/dev/null 2>&1; then
   restart=true
@@ -41,9 +46,9 @@ mv -f "$server.new" "$server"
 npm install --prefix "$root/runtime" --omit=dev --no-audit --no-fund "$stage/"*.tgz
 "$server" configure
 if $global; then
-  node "$root/runtime/node_modules/web-research-opencode/dist/install.js" --global --binary "$server"
+  node "$root/runtime/node_modules/opencode-web-researcher/dist/install.js" --global --binary "$server"
 elif [[ -n "$project" ]]; then
-  node "$root/runtime/node_modules/web-research-opencode/dist/install.js" --project "$project" --binary "$server"
+  node "$root/runtime/node_modules/opencode-web-researcher/dist/install.js" --project "$project" --binary "$server"
 fi
 echo "Installed server: $server"
 echo 'Reload opted-in OpenCode locations to load the updated plugin. Existing data/login are preserved.'

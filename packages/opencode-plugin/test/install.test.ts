@@ -17,6 +17,17 @@ test("project installation preserves comments/settings and does not duplicate re
   assert.throws(() => mergePlugin('{"plugins":{}}', 'plugin', 'binary'), /array/);
 });
 
+test("package rename replaces the legacy registration without duplicating tools", () => {
+  const current = "file:///data/app/runtime/node_modules/opencode-web-researcher/";
+  const legacy = "file:///data/app/runtime/node_modules/web-research-opencode";
+  for (const entry of [legacy, {package: legacy, options: {binary: "old"}}]) {
+    const source = JSON.stringify({plugins: ["other-plugin", entry]});
+    const updated = mergePlugin(source, current, "server");
+    assert.deepEqual(parse(updated).plugins, ["other-plugin", {package: current, options: {binary: "server"}}]);
+    assert.equal(mergePlugin(updated, current, "server"), updated);
+  }
+});
+
 test("global setup uses the global agents directory and preserves customized instructions", async () => {
   const root = await mkdtemp(join(tmpdir(), "research-global-"));
   try {

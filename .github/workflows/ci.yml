@@ -28,14 +28,14 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --locked
-      - run: cargo build --release --locked -p research-app
-      - run: npm pack --workspace web-research-opencode
+      - run: node scripts/build-release.mjs
+      - run: npm pack --workspace opencode-web-researcher
       - uses: actions/upload-artifact@v4
         with:
-          name: web-research-${{ runner.os }}-${{ runner.arch }}
+          name: opencode-web-researcher-${{ runner.os }}-${{ runner.arch }}
           path: |
             target/release/web-research
             target/release/web-research.exe
-            web-research-opencode-*.tgz
+            opencode-web-researcher-*.tgz
             README.md
             LICENSE

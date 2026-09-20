@@ -5,8 +5,11 @@ Run the server's `configure` command to create the shared `config.json` and prin
 
 By default, the config file is at:
 
-- Windows: `%LOCALAPPDATA%\web-research-opencode\config.json`
-- macOS: `~/Library/Application Support/web-research-opencode/config.json`
+- Windows: `%LOCALAPPDATA%\opencode-web-researcher\config.json`
+- macOS: `~/Library/Application Support/opencode-web-researcher/config.json`
+
+Existing installations reuse the legacy `web-research-opencode` data directory if present, keeping
+login, history, and the shared queue together. `WEB_RESEARCH_HOME` takes precedence over both defaults.
 
 For tests or a separate server instance, set `WEB_RESEARCH_HOME`. The plugin and executable must
 inherit the same value. This selects a different data directory, including its profile and queue.

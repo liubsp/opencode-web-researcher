@@ -2,10 +2,16 @@ param(
     [switch]$Global,
     [string]$Project,
     [string]$Ref = 'main',
-    [string]$InstallDir = "$env:LOCALAPPDATA\web-research-opencode\app",
+    [string]$InstallDir,
     [string]$SourceDirectory
 )
 $ErrorActionPreference = 'Stop'
+if (-not $InstallDir) {
+    $homeDir = if ($env:WEB_RESEARCH_HOME) { $env:WEB_RESEARCH_HOME }
+        elseif (Test-Path "$env:LOCALAPPDATA\web-research-opencode" -PathType Container) { "$env:LOCALAPPDATA\web-research-opencode" }
+        else { "$env:LOCALAPPDATA\opencode-web-researcher" }
+    $InstallDir = Join-Path $homeDir 'app'
+}
 if ($Global -and $Project) { throw 'Choose -Global or -Project, not both' }
 function Run([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
@@ -25,16 +31,16 @@ try {
     if ($SourceDirectory) { $source = (Resolve-Path -LiteralPath $SourceDirectory).Path }
     else {
     $archive = Join-Path $stage 'source.zip'
-    Invoke-WebRequest "https://github.com/liubsp/web-research-opencode/archive/$([uri]::EscapeDataString($Ref)).zip" -OutFile $archive
+    Invoke-WebRequest "https://github.com/liubsp/opencode-web-researcher/archive/$([uri]::EscapeDataString($Ref)).zip" -OutFile $archive
     Expand-Archive $archive (Join-Path $stage 'source')
     $source = (Get-ChildItem (Join-Path $stage 'source') -Directory | Select-Object -First 1).FullName
     }
     Push-Location $source
     try {
-        Run cargo @('build','--release','--locked','-p','research-app')
+        Run node @('scripts/build-release.mjs')
         Run npm.cmd @('ci')
         Run npm.cmd @('run','build')
-        Run npm.cmd @('pack','--workspace','web-research-opencode','--pack-destination',$stage)
+        Run npm.cmd @('pack','--workspace','opencode-web-researcher','--pack-destination',$stage)
     } finally { Pop-Location }
     $package = (Get-ChildItem $stage -Filter '*.tgz' | Select-Object -First 1).FullName
     # Build succeeds before interrupting the installed daemon.
@@ -54,9 +60,9 @@ try {
     Run npm.cmd @('install','--prefix',$runtime,'--omit=dev','--no-audit','--no-fund',$package)
     Run $server @('configure')
     if ($Global) {
-        Run node @((Join-Path $runtime 'node_modules\web-research-opencode\dist\install.js'),'--global','--binary',$server)
+        Run node @((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--global','--binary',$server)
     } elseif ($Project) {
-        Run node @((Join-Path $runtime 'node_modules\web-research-opencode\dist\install.js'),'--project',$Project,'--binary',$server)
+        Run node @((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--project',$Project,'--binary',$server)
     }
     Write-Output "Installed server: $server"
     Write-Output 'Reload opted-in OpenCode locations to load the updated plugin. Existing data/login are preserved.'

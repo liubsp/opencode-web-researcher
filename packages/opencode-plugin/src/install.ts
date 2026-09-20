@@ -12,7 +12,11 @@ export function mergePlugin(source: string, packagePath: string, binary: string)
   if (errors.length || !config || Array.isArray(config) || typeof config !== "object") throw new Error("Invalid OpenCode JSONC; not modifying it");
   const existing = config.plugins ?? [];
   if (!Array.isArray(existing)) throw new Error("OpenCode plugins must be an array");
-  const plugins = existing.filter(entry => !(typeof entry === "object" && entry?.package === packagePath) && entry !== packagePath);
+  const legacyPath = packagePath.replace(/\/opencode-web-researcher\/?$/, "/web-research-opencode/");
+  const plugins = existing.filter(entry => {
+    const name = typeof entry === "object" && entry ? entry.package : entry;
+    return typeof name !== "string" || ![packagePath, legacyPath].some(path => name.replace(/\/$/, "") === path.replace(/\/$/, ""));
+  });
   plugins.push({ package: packagePath, options: { binary } });
   return applyEdits(source, modify(source, ["plugins"], plugins, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
 }

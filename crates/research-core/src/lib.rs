@@ -31,7 +31,12 @@ pub fn data_dir() -> Result<PathBuf> {
     }
     let dirs = directories::BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Cannot locate user data directory"))?;
-    Ok(dirs.data_local_dir().join("web-research-opencode"))
+    // Reuse existing installations so the rename doesn't split login, history, or the queue.
+    let legacy = dirs.data_local_dir().join("web-research-opencode");
+    if legacy.is_dir() {
+        return Ok(legacy);
+    }
+    Ok(dirs.data_local_dir().join("opencode-web-researcher"))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

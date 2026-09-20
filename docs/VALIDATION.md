@@ -53,7 +53,7 @@ Implementation target: OpenCode 2.0.8, installed Google Chrome, Windows and macO
   the follow-up completed without another error. See [prompt review and test log](AGENT-LIVE-TEST.md).
 
 Project routing was additionally live-verified on Windows after migrating storage to
-`%LOCALAPPDATA%\web-research-opencode`. The agent submitted one normal-chat request, with no forced
+the shared application data directory. The agent submitted one normal-chat request, with no forced
 Search selection and no final period. It completed with Extra High and no error. Live DOM inspection
 confirmed the conversation URL used the configured project's `/g/g-p-…/c/…` route, and
 the conversation appeared under that project in the sidebar. The migrated login remained valid.

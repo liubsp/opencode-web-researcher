@@ -1,4 +1,4 @@
-# 🦀 Web Research for OpenCode
+# 🦀 OpenCode Web Researcher
 
 [![Rust](https://img.shields.io/badge/Built_with-Rust-000000?logo=rust)](https://www.rust-lang.org/)
 [![OpenCode V2](https://img.shields.io/badge/Works_with-OpenCode_V2-18181B)](https://opencode.ai/)
@@ -23,13 +23,13 @@ Run from the repo where you want to use it:
 **Windows · PowerShell**
 
 ```powershell
-& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.ps1').Content)) -Project (Get-Location).Path
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/liubsp/opencode-web-researcher/main/scripts/install.ps1').Content)) -Project (Get-Location).Path
 ```
 
 **macOS**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.sh | bash -s -- "$PWD"
+curl -fsSL https://raw.githubusercontent.com/liubsp/opencode-web-researcher/main/scripts/install.sh | bash -s -- "$PWD"
 ```
 
 For all projects, replace `-Project (Get-Location).Path` with `-Global` on Windows, or `"$PWD"`
@@ -41,17 +41,18 @@ and removal.
 **Windows · PowerShell**
 
 ```powershell
-& "$env:LOCALAPPDATA\web-research-opencode\app\bin\web-research-server.exe" login
+& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\web-research-server.exe" login
 ```
 
 **macOS**
 
 ```sh
-"$HOME/Library/Application Support/web-research-opencode/app/bin/web-research-server" login
+"$HOME/Library/Application Support/opencode-web-researcher/app/bin/web-research-server" login
 ```
 
 Sign in to ChatGPT in the window that opens, then reload your OpenCode project. This profile is
 separate from your everyday Chrome login. The background server starts automatically.
+Upgrading an older installation? Use the server path printed by the installer; it reuses existing data.
 
 ## Use it
 

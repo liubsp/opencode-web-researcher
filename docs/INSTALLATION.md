@@ -8,11 +8,11 @@ The server and Chrome login are shared across registered projects.
 For all-project availability:
 
 ```powershell
-& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.ps1').Content)) -Global
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/liubsp/opencode-web-researcher/main/scripts/install.ps1').Content)) -Global
 ```
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/liubsp/web-research-opencode/main/scripts/install.sh | bash -s -- --global
+curl -fsSL https://raw.githubusercontent.com/liubsp/opencode-web-researcher/main/scripts/install.sh | bash -s -- --global
 ```
 
 This registers the plugin in `~/.config/opencode/opencode.json(c)` and the agent in
@@ -34,21 +34,25 @@ OpenCode 2.0.8 is our tested version, not a verified minimum. The plugin current
 
 The shared data directory is:
 
-- Windows: `%LOCALAPPDATA%\web-research-opencode`
-- macOS: `~/Library/Application Support/web-research-opencode`
+- Windows: `%LOCALAPPDATA%\opencode-web-researcher`
+- macOS: `~/Library/Application Support/opencode-web-researcher`
+
+Upgrades reuse an existing `web-research-opencode` data directory. Use the server path printed by the
+installer for login and removal commands below. Rerun setup in each registered location to replace
+the old package registration with `opencode-web-researcher`.
 
 Inside it, the server lives at `app/bin/web-research-server.exe` on Windows or
 `app/bin/web-research-server` on macOS. The plugin lives at
-`app/runtime/node_modules/web-research-opencode`.
+`app/runtime/node_modules/opencode-web-researcher`.
 
 Sign in once:
 
 ```powershell
-& "$env:LOCALAPPDATA\web-research-opencode\app\bin\web-research-server.exe" login
+& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\web-research-server.exe" login
 ```
 
 ```sh
-"$HOME/Library/Application Support/web-research-opencode/app/bin/web-research-server" login
+"$HOME/Library/Application Support/opencode-web-researcher/app/bin/web-research-server" login
 ```
 
 This opens a separate Chrome profile. Your everyday Chrome login isn't inherited.
@@ -98,7 +102,7 @@ editing or shell permissions, although your parent coding agent keeps its usual 
 From the plugin checkout:
 
 ```sh
-cargo build --release --locked -p research-app
+node scripts/build-release.mjs
 npm ci
 npm run build
 ```
@@ -106,11 +110,11 @@ npm run build
 Then register it in a target repo:
 
 ```powershell
-node packages/opencode-plugin/dist/install.js --project "C:\projects\my-app" --binary "C:\tools\web-research-opencode\target\release\web-research.exe"
+node packages/opencode-plugin/dist/install.js --project "C:\projects\my-app" --binary "C:\tools\opencode-web-researcher\target\release\web-research.exe"
 ```
 
 ```sh
-node packages/opencode-plugin/dist/install.js --project /path/to/my-app --binary /path/to/web-research-opencode/target/release/web-research
+node packages/opencode-plugin/dist/install.js --project /path/to/my-app --binary /path/to/opencode-web-researcher/target/release/web-research
 ```
 
 Source builds use the executable name `web-research`; bootstrap installations name it
@@ -121,7 +125,7 @@ CI packages an executable and npm tarball. To use those, install the tarball in 
 directory and run its setup command with absolute paths:
 
 ```sh
-npm install /path/to/web-research-opencode-0.1.0.tgz
+npm install /path/to/opencode-web-researcher-0.1.0.tgz
 npx --no-install web-research-setup --project /path/to/my-app --binary /path/to/web-research-server
 ```
 
@@ -142,13 +146,13 @@ research aren't deleted. Remove any separate global or per-repo registrations as
 To remove the shared app, first unregister it everywhere, then stop the server and delete `app`:
 
 ```powershell
-& "$env:LOCALAPPDATA\web-research-opencode\app\bin\web-research-server.exe" shutdown
-Remove-Item -LiteralPath "$env:LOCALAPPDATA\web-research-opencode\app" -Recurse -Force
+& "$env:LOCALAPPDATA\opencode-web-researcher\app\bin\web-research-server.exe" shutdown
+Remove-Item -LiteralPath "$env:LOCALAPPDATA\opencode-web-researcher\app" -Recurse -Force
 ```
 
 ```sh
-"$HOME/Library/Application Support/web-research-opencode/app/bin/web-research-server" shutdown
-rm -rf "$HOME/Library/Application Support/web-research-opencode/app"
+"$HOME/Library/Application Support/opencode-web-researcher/app/bin/web-research-server" shutdown
+rm -rf "$HOME/Library/Application Support/opencode-web-researcher/app"
 ```
 
 If already stopped, `shutdown` may report that it can't connect. On Windows, let active requests

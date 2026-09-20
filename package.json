@@ -1,11 +1,11 @@
 {
-  "name": "web-research-opencode-workspace",
+  "name": "opencode-web-researcher-workspace",
   "private": true,
   "type": "module",
   "workspaces": ["packages/opencode-plugin"],
   "scripts": {
-    "build": "npm run build --workspace web-research-opencode",
-    "check": "npm run check --workspace web-research-opencode",
-    "test": "npm run test --workspace web-research-opencode"
+    "build": "npm run build --workspace opencode-web-researcher",
+    "check": "npm run check --workspace opencode-web-researcher",
+    "test": "npm run test --workspace opencode-web-researcher"
   }
 }
