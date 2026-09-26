@@ -94,6 +94,70 @@ fn retries_cannot_change_payload_or_scope() -> Result<()> {
 }
 
 #[test]
+fn exact_key_retries_only_provably_unsent_failure() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path)?;
+    let request = input("failed-preparation", None);
+    let config = Config::default();
+    let mut job = store.submit(&request, config.clone(), 10)?;
+    assert_eq!(store.submit(&request, config.clone(), 11)?.id, job.id);
+    job.state = "preparing".into();
+    store.finish(&mut job, "failed", Some("composer not ready".into()), 20)?;
+    assert_eq!(store.thread(&job.thread_id)?.prompts, 0);
+    drop(store);
+    let mut store = Store::open(&path)?;
+    let retried = store.submit(&request, config.clone(), 30)?;
+    assert_eq!(retried.id, job.id);
+    assert_eq!(retried.state, "queued");
+    assert_eq!(retried.created_at, 30);
+    assert!(retried.error.is_none());
+    assert!(retried.send_after.is_none());
+    assert_eq!(store.thread(&job.thread_id)?.prompts, 1);
+    assert_eq!(store.submit(&request, config.clone(), 31)?.id, job.id);
+    assert_eq!(store.thread(&job.thread_id)?.prompts, 1);
+
+    let mut submitted = retried;
+    submitted.state = "submitting".into();
+    submitted.submitted_at = Some(40);
+    submitted.baseline = Some(0);
+    store.finish(
+        &mut submitted,
+        "failed",
+        Some("could not observe".into()),
+        41,
+    )?;
+    let replay = store.submit(&request, config, 50)?;
+    assert_eq!(replay.state, "failed");
+    assert_eq!(replay.submitted_at, Some(40));
+    assert_eq!(store.thread(&job.thread_id)?.prompts, 1);
+    Ok(())
+}
+
+#[test]
+fn unsent_retry_never_jumps_past_later_work_or_changes_payload() -> Result<()> {
+    let mut store = Store::open(std::path::Path::new(":memory:"))?;
+    let config = Config::default();
+    let original = input("first", None);
+    let mut job = store.submit(&original, config.clone(), 10)?;
+    store.finish(&mut job, "failed", None, 11)?;
+    let mut changed = original.clone();
+    changed.prompt = "not the original".into();
+    assert!(store.submit(&changed, config.clone(), 12).is_err());
+    let followup = input("second", Some(job.thread_id.clone()));
+    store.submit(&followup, config.clone(), 13)?;
+    assert!(
+        store
+            .submit(&original, config, 14)
+            .unwrap_err()
+            .to_string()
+            .contains("retry_order_conflict")
+    );
+    assert_eq!(store.job(&job.id)?.state, "failed");
+    Ok(())
+}
+
+#[test]
 fn archive_is_durable_and_retirement_retries_preserve_it() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let mut store = Store::open(&dir.path().join("db"))?;

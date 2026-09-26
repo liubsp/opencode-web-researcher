@@ -48,13 +48,13 @@ impl Store {
             )
             .optional()?;
         if let Some(data) = prior {
-            let job: Job = serde_json::from_str(&data)?;
+            let mut job: Job = serde_json::from_str(&data)?;
             let original: String = tx.query_row(
                 "SELECT data FROM threads WHERE id=?",
                 [&job.thread_id],
                 |r| r.get(0),
             )?;
-            let original: Thread = serde_json::from_str(&original)?;
+            let mut original: Thread = serde_json::from_str(&original)?;
             ensure!(
                 job.prompt == input.prompt
                     && input
@@ -69,6 +69,47 @@ impl Store {
                     && (input.thread_id.is_some() || original.deep_research == input.deep_research),
                 "idempotency_conflict"
             );
+            // A failed preparation is provably unsent: submitting persists both
+            // fields before clicking Send. Reuse the original request/key only
+            // in that case; all ambiguous and submitted outcomes stay immutable.
+            if job.state == "failed"
+                && job.submitted_at.is_none()
+                && job.baseline.is_none()
+                && job.selection.is_none()
+                && job.response.is_none()
+            {
+                ensure!(original.state == "active", "thread_retired");
+                ensure!(original.prompts < PROMPT_LIMIT, "prompt_limit_reached");
+                ensure!(at < original.inactivity_deadline(&config), "thread_expired");
+                let latest: String = tx.query_row(
+                    "SELECT id FROM jobs WHERE thread_id=? ORDER BY rowid DESC LIMIT 1",
+                    [&job.thread_id],
+                    |row| row.get(0),
+                )?;
+                ensure!(latest == job.id, "retry_order_conflict");
+                let pending: i64 = tx.query_row(
+                    "SELECT count(*) FROM jobs WHERE thread_id=? AND state NOT IN ('completed','failed','cancelled')",
+                    [&job.thread_id],
+                    |row| row.get(0),
+                )?;
+                ensure!(pending == 0, "thread_busy: wait for the existing request");
+                original.prompts += 1; // finish released the unsent reservation.
+                original.active_at = at;
+                job.config = config;
+                job.state = "queued".into();
+                job.error = None;
+                job.created_at = at;
+                job.send_after = None;
+                tx.execute(
+                    "UPDATE jobs SET state=?, created_at=?, data=? WHERE id=?",
+                    params![job.state, at, serde_json::to_string(&job)?, job.id],
+                )?;
+                tx.execute(
+                    "UPDATE threads SET data=? WHERE id=?",
+                    params![serde_json::to_string(&original)?, original.id],
+                )?;
+                tx.commit()?;
+            }
             return Ok(job);
         }
         let mut thread = if let Some(id) = &input.thread_id {
