@@ -23,14 +23,14 @@ export function mergePlugin(source: string, packagePath: string, binary: string)
 
 async function exists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 
-export async function install(project: string, binary: string, global = false): Promise<void> {
+export async function install(project: string, binary: string, global = false, previousAgent?: string): Promise<void> {
   if (global) await mkdir(project, { recursive: true });
   const root = await realpath(project);
   const executable = await realpath(binary);
   const packageDir = fileURLToPath(new URL("../", import.meta.url));
   const agent = await readFile(resolve(packageDir, "agents/web-researcher.md"), "utf8");
   const agentPath = resolve(root, global ? "agents/web-researcher.md" : ".opencode/agents/web-researcher.md");
-  if (await exists(agentPath) && await readFile(agentPath, "utf8") !== agent) {
+  if (await exists(agentPath) && ![agent, previousAgent].includes(await readFile(agentPath, "utf8"))) {
     throw new Error(`Existing agent differs: ${agentPath}. Review it before installing.`);
   }
   const jsonc = resolve(root, "opencode.jsonc");
@@ -46,8 +46,8 @@ export async function install(project: string, binary: string, global = false): 
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const { values } = parseArgs({ options: { project: { type: "string" }, binary: { type: "string" }, global: { type: "boolean" } } });
+  const { values } = parseArgs({ options: { project: { type: "string" }, binary: { type: "string" }, global: { type: "boolean" }, "previous-agent": { type: "string" } } });
   if (!values.binary || Boolean(values.project) === Boolean(values.global)) throw new Error("Usage: web-research-setup (--global | --project <directory>) --binary <server executable>");
   const root = values.global ? resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "opencode") : values.project!;
-  await install(root, values.binary, values.global);
+  await install(root, values.binary, values.global, values["previous-agent"] ? await readFile(values["previous-agent"], "utf8") : undefined);
 }

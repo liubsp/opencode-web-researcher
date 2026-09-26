@@ -45,6 +45,9 @@ try {
     $package = (Get-ChildItem $stage -Filter '*.tgz' | Select-Object -First 1).FullName
     # Build succeeds before interrupting the installed daemon.
     $candidate = Join-Path $source 'target\release\opencode-web-researcher.exe'
+    $previousAgent = Join-Path $stage 'previous-agent.md'
+    $bundledAgent = Join-Path $runtime 'node_modules\opencode-web-researcher\agents\web-researcher.md'
+    if (Test-Path $bundledAgent) { Copy-Item $bundledAgent $previousAgent }
     if (Test-Path $candidate) {
         # A stopped service is normal; Windows PowerShell turns native stderr into errors.
         $previousErrorAction = $ErrorActionPreference
@@ -64,10 +67,12 @@ try {
     if (-not $copied) { throw 'Server executable remains busy; retry after active requests finish' }
     Run npm.cmd @('install','--prefix',$runtime,'--omit=dev','--no-audit','--no-fund',$package)
     Run $server @('configure')
+    $installerArgs = @()
+    if (Test-Path $previousAgent) { $installerArgs += @('--previous-agent',$previousAgent) }
     if ($Global) {
-        Run node @((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--global','--binary',$server)
+        Run node (@((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--global','--binary',$server) + $installerArgs)
     } elseif ($Project) {
-        Run node @((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--project',$Project,'--binary',$server)
+        Run node (@((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--project',$Project,'--binary',$server) + $installerArgs)
     }
     Write-Output "Installed server: $server"
     Write-Output 'Reload opted-in OpenCode locations to load the updated plugin. Existing data/login are preserved.'

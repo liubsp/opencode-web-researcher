@@ -8,7 +8,7 @@ const object = (properties: Record<string, unknown>, required: string[] = []) =>
 
 export function tools(project: string, call: Call): Info[] {
   const definitions = [
-    { name: "start", description: "Start one ChatGPT research thread in normal chat mode; ChatGPT decides when to search. Only an explicit user request for Deep Research may enable deep_research. Save the returned IDs. Reuse request_key for retries; a failed request is requeued with that key only when no submission occurred.",
+    { name: "start", description: "Start one ChatGPT research thread in normal chat mode; ChatGPT decides when to search. Ask for very deep research in the first prompt even in normal chat; only an explicit request from the asking agent for ChatGPT's Deep Research mode may enable deep_research. Save the returned IDs. Reuse request_key for retries; a failed request is requeued with that key only when no submission occurred.",
       input: object({ prompt: text, request_key: id, deep_research: { type: "boolean", default: false } }, ["prompt", "request_key"]) },
     { name: "send", description: "Submit a useful follow-up in the same thread. Hard limit: ten prompts total. Reuse request_key for retries; a failed request is requeued with that key only when no submission occurred. Never send while a request is pending.",
       input: object({ thread_id: id, prompt: text, request_key: id }, ["thread_id", "prompt", "request_key"]) },

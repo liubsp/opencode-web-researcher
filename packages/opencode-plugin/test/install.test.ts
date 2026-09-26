@@ -40,8 +40,11 @@ test("global setup uses the global agents directory and preserves customized ins
     const config = await readFile(join(root, "opencode.jsonc"), "utf8");
     assert.match(config, /keep me/);
     assert.equal(parse(config).plugins.length, 1);
+    await writeFile(agent, "prior bundled instructions");
+    await install(root, process.execPath, true, "prior bundled instructions");
+    assert.match(await readFile(agent, "utf8"), /mode: subagent/);
     await writeFile(agent, "custom instructions");
-    await assert.rejects(install(root, process.execPath, true), /Existing agent differs/);
+    await assert.rejects(install(root, process.execPath, true, "prior bundled instructions"), /Existing agent differs/);
     assert.equal(await readFile(agent, "utf8"), "custom instructions");
   } finally { await rm(root, {recursive:true, force:true}); }
 });
