@@ -52,3 +52,13 @@ test("read-only imports retain trusted scope and stable retry keys", async () =>
   assert.equal(calls[0].request_key, "session-a:read-1");
   assert.equal(calls[0].op, "read_chats");
 });
+
+test("saved managed responses can be paged without submitting a new prompt", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const tool = tools("project-a", async input => { calls.push(input); return { markdown: "part", next_offset: 4 }; })
+    .find(t => t.name === "research_response_content")!;
+  const ctx = { agent: "web-researcher", sessionID: "session-a", progress: async () => {} } as unknown as ToolContext;
+  const result = await tool.execute({ id: "managed-request", offset: 0, limit: 4, project: "forged" }, ctx);
+  assert.deepEqual(calls, [{ op: "response_content", id: "managed-request", offset: 0, limit: 4, project: "project-a" }]);
+  assert.match(result.content, /"next_offset":4/);
+});

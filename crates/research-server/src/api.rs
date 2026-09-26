@@ -11,6 +11,8 @@ use research_core::{Config, Submit, now};
 use serde_json::{Value, json};
 use std::time::Duration;
 
+const RESPONSE_PREVIEW_CHARS: usize = 4000;
+
 pub fn router(state: State) -> Router {
     Router::new()
         .route("/v1/rpc", post(handle))
@@ -132,12 +134,54 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
                     }
                 }
             }
-            let job = scoped_job(state, &input)?;
+            let mut job = scoped_job(state, &input)?;
             let thread = state.store.lock().unwrap().thread(&job.thread_id)?;
             let local_transcript =
                 crate::transcripts::managed(&state.store.lock().unwrap(), &state.dir, &thread);
+            let mut response_paging = Value::Null;
+            if let Some(response) = &mut job.response
+                && let Some(markdown) = response["markdown"].as_str()
+            {
+                let total = markdown.chars().count();
+                response_paging = json!({"total_chars":total,
+                    "next_offset":if total > RESPONSE_PREVIEW_CHARS {Some(RESPONSE_PREVIEW_CHARS)} else {None}});
+                if total > RESPONSE_PREVIEW_CHARS {
+                    response["markdown"] = json!(
+                        markdown
+                            .chars()
+                            .take(RESPONSE_PREVIEW_CHARS)
+                            .collect::<String>()
+                    );
+                    if let Some(text) = response["text"].as_str() {
+                        response["text"] = json!(
+                            text.chars()
+                                .take(RESPONSE_PREVIEW_CHARS)
+                                .collect::<String>()
+                        );
+                    }
+                    response["truncated"] = json!(true);
+                }
+            }
+            Ok(json!({"request":job,"response_paging":response_paging,
+                    "remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":30,"local_transcript":local_transcript}))
+        }
+        "response_content" => {
+            let job = scoped_job(state, &input)?;
+            let markdown = job
+                .response
+                .as_ref()
+                .and_then(|value| value["markdown"].as_str())
+                .ok_or_else(|| anyhow::anyhow!("No captured response for this request"))?;
+            let offset = input["offset"].as_u64().unwrap_or(0) as usize;
+            let limit = input["limit"].as_u64().unwrap_or(12000).clamp(1, 32000) as usize;
+            let total = markdown.chars().count();
+            ensure!(offset <= total, "Offset exceeds response length");
+            let end = (offset + limit).min(total);
             Ok(
-                json!({"request":job,"remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":30,"local_transcript":local_transcript}),
+                json!({"id":job.id,"thread_id":job.thread_id,"state":job.state,
+                "complete":job.state == "completed","offset":offset,"total_chars":total,
+                "next_offset":if end < total {Some(end)} else {None},
+                "markdown":markdown.chars().skip(offset).take(limit).collect::<String>()}),
             )
         }
         "list" => {
@@ -331,6 +375,7 @@ mod tests {
             notify: Arc::new(tokio::sync::Notify::new()),
             shutdown,
         };
+        let store = state.store.clone();
         let mut imported = state.store.lock().unwrap().submit_read(
             "a",
             "s",
@@ -438,6 +483,112 @@ mod tests {
         .await?;
         assert_eq!(cancelled["request"]["state"], "cancelled");
         assert_eq!(cancelled["remaining_prompts"], 10);
+        // A long managed answer remains available without another submission,
+        // even when the normal wait/get result is too large for the caller.
+        let answer = crate::client::rpc(
+            &descriptor,
+            json!({"op":"submit","request":{
+            "project":"a","session":"s","key":"answer","prompt":"long answer pls",
+            "deep_research":false}}),
+            5,
+        )
+        .await?;
+        let mut saved = store.lock().unwrap().job(answer["id"].as_str().unwrap())?;
+        saved.response = Some(json!({"markdown":"Aéñ👋Z"}));
+        saved.state = "completed".into();
+        store.lock().unwrap().save_job(&saved)?;
+        let response = crate::client::rpc(
+            &descriptor,
+            json!({"op":"response_content","project":"a","id":answer["id"],"offset":1,"limit":3}),
+            5,
+        )
+        .await?;
+        assert_eq!(response["markdown"], "éñ👋");
+        assert_eq!(response["next_offset"], 4);
+        assert_eq!(response["total_chars"], 5);
+        assert_eq!(response["complete"], true);
+        let tail = crate::client::rpc(
+            &descriptor,
+            json!({"op":"response_content","project":"a","id":answer["id"],"offset":4}),
+            5,
+        )
+        .await?;
+        assert_eq!(tail["markdown"], "Z");
+        assert_eq!(tail["next_offset"], Value::Null);
+        assert!(
+            crate::client::rpc(
+                &descriptor,
+                json!({"op":"response_content","project":"b","id":answer["id"]}),
+                5,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            crate::client::rpc(
+                &descriptor,
+                json!({"op":"response_content","project":"a","id":answer["id"],"offset":6}),
+                5,
+            )
+            .await
+            .is_err()
+        );
+        let long = format!("{}👋ending", "a".repeat(RESPONSE_PREVIEW_CHARS + 42));
+        saved.response = Some(json!({"markdown":long,"text":long}));
+        store.lock().unwrap().save_job(&saved)?;
+        let preview = crate::client::rpc(
+            &descriptor,
+            json!({"op":"get","project":"a","id":answer["id"]}),
+            5,
+        )
+        .await?;
+        assert_eq!(
+            preview["response_paging"]["total_chars"],
+            long.chars().count()
+        );
+        assert_eq!(
+            preview["response_paging"]["next_offset"],
+            RESPONSE_PREVIEW_CHARS
+        );
+        assert_eq!(preview["request"]["response"]["truncated"], true);
+        assert_eq!(
+            preview["request"]["response"]["markdown"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            RESPONSE_PREVIEW_CHARS
+        );
+        assert_eq!(
+            preview["request"]["response"]["text"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            RESPONSE_PREVIEW_CHARS
+        );
+        let mut offset = 0;
+        let mut recovered = String::new();
+        loop {
+            let page = crate::client::rpc(&descriptor,
+                json!({"op":"response_content","project":"a","id":answer["id"],"offset":offset,"limit":999}), 5).await?;
+            recovered.push_str(page["markdown"].as_str().unwrap());
+            if let Some(next) = page["next_offset"].as_u64() {
+                offset = next;
+            } else {
+                break;
+            }
+        }
+        assert_eq!(recovered, long);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .job(answer["id"].as_str().unwrap())?
+                .response
+                .unwrap()["markdown"],
+            long
+        );
         server.abort();
         Ok(())
     }

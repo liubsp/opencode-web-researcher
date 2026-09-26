@@ -26,6 +26,7 @@ $stage = Join-Path ([IO.Path]::GetTempPath()) ('web-research-install-' + [guid]:
 $server = Join-Path $InstallDir 'bin\opencode-web-researcher.exe'
 $runtime = Join-Path $InstallDir 'runtime'
 $restart = $false
+$startupLock = $null
 try {
     New-Item -ItemType Directory $stage | Out-Null
     if ($SourceDirectory) { $source = (Resolve-Path -LiteralPath $SourceDirectory).Path }
@@ -48,7 +49,16 @@ try {
     $previousAgent = Join-Path $stage 'previous-agent.md'
     $bundledAgent = Join-Path $runtime 'node_modules\opencode-web-researcher\agents\web-researcher.md'
     if (Test-Path $bundledAgent) { Copy-Item $bundledAgent $previousAgent }
-    if (Test-Path $candidate) {
+    $replaceBinary = -not (Test-Path $server) -or (Get-FileHash $candidate).Hash -ne (Get-FileHash $server).Hash
+    if ($replaceBinary) {
+        # Prevent another client from auto-starting the old executable between
+        # shutdown and replacement. Rust bootstrappers use this same lock.
+        $startupPath = Join-Path (Split-Path $InstallDir -Parent) 'startup.lock'
+        for ($attempt = 0; $attempt -lt 120 -and -not $startupLock; $attempt++) {
+            try { $startupLock = [IO.File]::Open($startupPath, 'OpenOrCreate', 'ReadWrite', 'None') }
+            catch { Start-Sleep -Seconds 1 }
+        }
+        if (-not $startupLock) { throw 'Could not acquire research service startup lock' }
         # A stopped service is normal; Windows PowerShell turns native stderr into errors.
         $previousErrorAction = $ErrorActionPreference
         try {
@@ -56,15 +66,32 @@ try {
             & $candidate status *> $null
             $restart = $LASTEXITCODE -eq 0
         } finally { $ErrorActionPreference = $previousErrorAction }
-        if ($restart) { Run $candidate @('shutdown') }
+        if ($restart) {
+            $serviceDescriptor = Join-Path (Split-Path $InstallDir -Parent) 'service.json'
+            $servicePid = if (Test-Path $serviceDescriptor) { (Get-Content $serviceDescriptor -Raw | ConvertFrom-Json).pid } else { $null }
+            Run $candidate @('shutdown')
+            # The RPC acknowledges shutdown before the daemon releases its executable.
+            # A long read may still be finishing; never replace a running binary.
+            if ($servicePid) {
+                for ($attempt = 0; $attempt -lt 120 -and (Get-Process -Id $servicePid -ErrorAction SilentlyContinue); $attempt++) {
+                    Start-Sleep -Seconds 1
+                }
+                if (Get-Process -Id $servicePid -ErrorAction SilentlyContinue) {
+                    throw 'Research service did not exit after shutdown; installation was not applied'
+                }
+            }
+        }
     }
     New-Item -ItemType Directory -Force (Split-Path $server),$runtime | Out-Null
-    $copied = $false
-    for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        try { Copy-Item $candidate $server -Force; $copied = $true; break }
-        catch { Start-Sleep -Seconds 1 }
+    if ($replaceBinary) {
+        $copied = $false
+        $copyError = $null
+        for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            try { Copy-Item $candidate $server -Force; $copied = $true; break }
+            catch { $copyError = $_.Exception; Start-Sleep -Seconds 1 }
+        }
+        if (-not $copied) { throw "Server executable could not be replaced ($($copyError.GetType().Name), $($copyError.HResult))" }
     }
-    if (-not $copied) { throw 'Server executable remains busy; retry after active requests finish' }
     Run npm.cmd @('install','--prefix',$runtime,'--omit=dev','--no-audit','--no-fund',$package)
     Run $server @('configure')
     $installerArgs = @()
@@ -75,9 +102,10 @@ try {
         Run node (@((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--project',$Project,'--binary',$server) + $installerArgs)
     }
     Write-Output "Installed server: $server"
-    Write-Output 'Reload opted-in OpenCode locations to load the updated plugin. Existing data/login are preserved.'
+    Write-Output 'Restart the OpenCode service (opencode service restart) to load updated plugin tools. Existing research data/login are preserved.'
 } finally {
     try {
+        if ($startupLock) { $startupLock.Dispose() }
         if ($restart -and (Test-Path $server)) {
             # Keep a detached daemon from inheriting the installer's captured output pipe.
             $info = New-Object System.Diagnostics.ProcessStartInfo

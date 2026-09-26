@@ -142,8 +142,8 @@ async fn current_turn_markup_confirms_submission_and_response() -> Result<()> {
     let mut page = chrome.open("about:blank").await?;
     let prompt = "Find the official source.";
     let html = r##"<main><div class="group"><div><div>
-      <div data-content-search-unit-key="fallback-turn-0:0:user"><div data-user-message-bubble="true">Find the official source.</div>
-      <button aria-label="Copy message">Copy</button></div>
+      <div data-chatgpt-search-message-ids="question-1"><div data-content-search-unit-key="fallback-turn-0:0:user"><div data-user-message-bubble="true">Find the official source.</div>
+      <button aria-label="Copy message">Copy</button></div></div>
       <div><div data-content-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-message-ids="reply-1">
       <h4>ChatGPT said:</h4><div data-markdown-text-style="assistant-message"><p>See <a href="https://example.org/docs">docs</a>.</p></div>
       </div></div></div><button aria-label="Copy">Copy</button></div></main>"##;
@@ -151,6 +151,7 @@ async fn current_turn_markup_confirms_submission_and_response() -> Result<()> {
         .await?;
     let state = research_chatgpt::inspect(&mut page).await?;
     assert_eq!(state["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(state["turns"][0]["id"], "question-1");
     assert!(research_chatgpt::observation::user_turn_confirmed(
         &state, 0, prompt
     ));
@@ -166,11 +167,50 @@ async fn current_turn_markup_confirms_submission_and_response() -> Result<()> {
     assert!(research_chatgpt::observation::completion_candidate(
         &state, response
     ));
+    let repeated = r##"<div data-chatgpt-search-message-ids="question-2"><div data-content-search-unit-key="fallback-turn-1:0:user">Find the official source.</div></div>"##;
+    page.eval(&format!(
+        "document.querySelector('main').insertAdjacentHTML('beforeend', {})",
+        json!(repeated)
+    ))
+    .await?;
+    let capture = research_chatgpt::capture_rendered_chat(&mut page).await?;
+    assert_eq!(capture["turns"].as_array().unwrap().len(), 3);
+    assert_eq!(capture["turns"][2]["id"], "question-2");
+    assert_eq!(capture["missing_message_ids"], false);
+    assert_eq!(capture["capture_limit_reached"], false);
     page.eval("document.querySelector('button[aria-label=\"Copy\"]').remove()")
         .await?;
     assert_eq!(
         research_chatgpt::inspect(&mut page).await?["turns"][1]["complete"],
         false
+    );
+    chrome.close(&page.id).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Requires installed Chrome; synthetic reversed transcript, no account message"]
+async fn reads_to_end_of_column_reverse_transcript() -> Result<()> {
+    let dir = research_core::data_dir()?;
+    let chrome = Chrome::ensure(&dir, &Config::load(&dir)?).await?;
+    let mut page = chrome.open("about:blank").await?;
+    let html = r#"<div style="height:120px;overflow-y:auto;display:flex;flex-direction:column-reverse">
+      <main style="height:800px;flex:none">
+        <div data-message-author-role="user" data-message-id="first">First turn</div>
+        <div style="height:650px"></div>
+        <div data-message-author-role="assistant" data-message-id="last">Last turn</div>
+      </main></div>"#;
+    page.eval(&format!("document.body.innerHTML={}", json!(html)))
+        .await?;
+    let capture = research_chatgpt::capture_rendered_chat(&mut page).await?;
+    assert_eq!(capture["capture_limit_reached"], false);
+    assert_eq!(capture["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(capture["turns"][0]["id"], "first");
+    assert_eq!(capture["turns"][1]["id"], "last");
+    assert_eq!(
+        page.eval("document.querySelector('[style*=column-reverse]').scrollTop === 0")
+            .await?,
+        true
     );
     chrome.close(&page.id).await?;
     Ok(())

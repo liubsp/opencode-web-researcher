@@ -17,7 +17,7 @@ curl -fsSL https://raw.githubusercontent.com/liubsp/opencode-web-researcher/main
 
 This registers the plugin in `~/.config/opencode/opencode.json(c)` and the agent in
 `~/.config/opencode/agents/web-researcher.md`, or under `XDG_CONFIG_HOME` when configured.
-Remove old per-repo registrations when switching to global setup, then reload OpenCode locations.
+Remove old per-repo registrations when switching to global setup, then restart the OpenCode service.
 
 The bootstrap options are `-Global` (PowerShell) and `--global` (shell). Direct package setup also
 accepts `web-research-setup --global --binary <absolute-server-path>`. Global and project options
@@ -56,7 +56,7 @@ Sign in once:
 ```
 
 This opens a separate Chrome profile. Your everyday Chrome login isn't inherited.
-Reload the target OpenCode location after installation, then ask it to use `web-researcher`.
+Restart the OpenCode service after installation (`opencode service restart`), then ask it to use `web-researcher`.
 
 ## Another repo, or an update
 
@@ -75,7 +75,9 @@ was running. Otherwise the next research call starts it. Login and research data
 Prefer updating while research is idle. Interrupted submissions keep their recorded state;
 don't resend a question just because an update interrupted the wait.
 
-Reload open OpenCode locations to pick up plugin changes. Project agent files are separate:
+Restart the OpenCode service to load updated local plugin modules; reloading a location can leave
+the old module cached. The research daemon restarted by the installer is a separate process.
+Project agent files are separate:
 rerun project setup to install them, and review differences if it reports an existing-file conflict.
 The installer doesn't overwrite customized instructions. Updates aren't transactional rollbacks;
 if copying or npm installation fails, fix the error and rerun. Concurrent installs are serialized.

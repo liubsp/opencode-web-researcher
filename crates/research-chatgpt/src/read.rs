@@ -4,13 +4,17 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, time::Duration};
 
 const SCROLL: &str = r#"(op => {
-  const turn = document.querySelector('[data-message-author-role]');
+  const turn = document.querySelector('[data-message-author-role], [data-content-search-unit-key$=":user"], [data-content-search-unit-key$=":assistant"]');
   let root = turn?.parentElement;
   while (root && !(root.scrollHeight > root.clientHeight + 10 && /auto|scroll/.test(getComputedStyle(root).overflowY))) root = root.parentElement;
   root ||= document.scrollingElement;
-  if (op === 'top') root.scrollTop = 0;
+  // ChatGPT uses a column-reverse scroll container: its beginning has a
+  // negative scrollTop and its end is zero. Ordinary containers start at zero.
+  const reversed = getComputedStyle(root).flexDirection === 'column-reverse';
+  if (op === 'top') root.scrollTop = reversed ? -root.scrollHeight : 0;
   if (op === 'next') root.scrollTop += Math.max(200, root.clientHeight * .8);
-  return {top:root.scrollTop, height:root.scrollHeight, bottom:root.scrollTop + root.clientHeight >= root.scrollHeight - 5};
+  return {top:root.scrollTop, height:root.scrollHeight,
+    bottom:reversed ? root.scrollTop >= -5 : root.scrollTop + root.clientHeight >= root.scrollHeight - 5};
 })"#;
 
 /// Read only the currently rendered branch. No composer, menu, model, or Send interactions.

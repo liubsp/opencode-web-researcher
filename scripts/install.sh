@@ -51,4 +51,4 @@ elif [[ -n "$project" ]]; then
   node "$root/runtime/node_modules/opencode-web-researcher/dist/install.js" --project "$project" --binary "$server"
 fi
 echo "Installed server: $server"
-echo 'Reload opted-in OpenCode locations to load the updated plugin. Existing data/login are preserved.'
+echo 'Restart the OpenCode service (opencode service restart) to load updated plugin tools. Existing research data/login are preserved.'

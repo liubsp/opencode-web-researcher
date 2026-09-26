@@ -48,7 +48,7 @@
     turns: turns.map(({el,role,legacy}) => {
       const content = role === 'assistant' && !legacy ? el.querySelector('[data-markdown-text-style="assistant-message"]') || el : el;
       const container = legacy ? el.closest('.agent-turn,article,[data-testid^="conversation-turn-"]') : el.parentElement?.parentElement?.parentElement;
-      return {id:el.getAttribute('data-message-id') || el.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || null,
+      return {id:el.getAttribute('data-message-id') || el.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || null,
         role, text:role === 'user' ? editableText(el).trim() : content.innerText,
         markdown:markdown(content).replace(/\n{3,}/g,'\n\n').trim(),
         complete:role === 'assistant' && !el.querySelector('.streaming-animation') &&
