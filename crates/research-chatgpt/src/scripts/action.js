@@ -12,28 +12,33 @@
   };
   const find = pattern => controls().find(el => pattern.test(label(el)));
   const reasoningTrigger = () => controls().find(el => el.closest('form') && el.hasAttribute('aria-haspopup') && /^(thinking|thinking time|thinking effort|reasoning|extended|standard|high|extra high|instant|light|maximum)$/i.test(label(el)));
-  if (op === 'open_model') return click(document.querySelector('[data-testid="model-switcher-dropdown-button"]') || reasoningTrigger());
+  const composerSelector = '#prompt-textarea, [data-testid="composer-text-input"], form [role="textbox"][contenteditable="true"]';
+  const modelTrigger = () => document.querySelector('[data-testid="model-switcher-dropdown-button"]') ||
+    controls().find(el => el.closest('form')?.querySelector(composerSelector) && el.hasAttribute('aria-haspopup') && /^select chatgpt model$/i.test(label(el)));
+  const picker = () => document.querySelector('[data-testid="composer-intelligence-picker-content"]') ||
+    [...document.querySelectorAll('[role="menu"]')].find(el => visible(el) && el.querySelector('[role="menuitem"][aria-label="Power"] [role="slider"]'));
+  if (op === 'open_model') return click(modelTrigger() || reasoningTrigger());
   if (op === 'expand_model') return click(find(/^select model$/i));
   if (op === 'open_tools') {
     const plus = document.querySelector('[data-testid="composer-plus-btn"]');
     const trigger = visible(plus) ? plus : controls().find(el =>
-      el.closest('form')?.querySelector('#prompt-textarea, [data-testid="composer-text-input"]') &&
+      el.closest('form')?.querySelector(composerSelector) &&
       /^(tools|add files and more|add photos and files|more)$/i.test(label(el)));
     if (trigger?.getAttribute('aria-expanded') === 'true') return {ok:true};
     return click(trigger);
   }
   if (op === 'open_reasoning') {
-    if (visible(document.querySelector('[data-testid="composer-intelligence-picker-content"]'))) return {ok:true};
-    return click(reasoningTrigger());
+    if (visible(picker())) return {ok:true};
+    return click(reasoningTrigger() || modelTrigger());
   }
   if (op === 'reasoning_status' || op === 'reasoning_focus') {
-    const power = document.querySelector('[data-testid="composer-intelligence-picker-content"] [aria-label="Power"]');
+    const power = picker()?.querySelector('[aria-label="Power"]');
     const slider = power?.querySelector('[role="slider"]');
     if (!slider) return {ok:false};
     if (op === 'reasoning_focus') power.focus();
     const announcement = (power.getAttribute('aria-describedby') || '').split(' ').map(id=>document.getElementById(id)?.textContent || '').find(text=>/\d+ of \d+/.test(text)) || '';
     return {ok:true,selected:announcement.replace(/,\s*\d+ of \d+\.?$/,''),index:Number(slider.getAttribute('aria-valuenow')),max:Number(slider.getAttribute('aria-valuemax')),
-      model:document.querySelector('[data-testid="composer-intelligence-picker-content"] [role="menuitemradio"][aria-checked="true"]')?.innerText.trim() || null};
+      model:picker()?.querySelector('[role="menuitemradio"][aria-checked="true"]')?.innerText.trim() || null};
   }
   if (op === 'select') {
     for (const wanted of argument) {
@@ -44,7 +49,7 @@
   }
   if (op === 'select_mode') {
     const wanted = normalize(argument);
-    const composer = document.querySelector('#prompt-textarea');
+    const composer = document.querySelector(composerSelector);
     if (wanted === 'search' && composer?.querySelector('[data-system-hint-type="search"]')) return {ok:true,selected:'Web search'};
     const names = wanted === 'search' ? ['web search','search the web'] : ['deep research'];
     const leaf = [...document.querySelectorAll('span')].find(el => visible(el) && el.childElementCount === 0
@@ -53,7 +58,7 @@
     if (pluginItem) return click(pluginItem);
     // Never click the sidebar's chat-history Search button instead of composer web Search.
     const item = controls().find(el => {
-      const inComposer = el.closest('form')?.querySelector('#prompt-textarea, [data-testid="composer-text-input"]');
+      const inComposer = el.closest('form')?.querySelector(composerSelector);
       const inMenu = el.closest('[role="menu"], [role="listbox"]');
       return (inComposer || inMenu) && (normalize(label(el).split('\n')[0]) === wanted ||
         (wanted === 'search' && ['searchtheweb','websearch'].includes(normalize(label(el).split('\n')[0]))));
@@ -62,14 +67,18 @@
     return click(item);
   }
   if (op === 'focus') {
-    const composer = document.querySelector('#prompt-textarea, [data-testid="composer-text-input"]');
+    const composer = document.querySelector(composerSelector);
     if (!visible(composer)) return {ok:false};
     composer.focus();
-    const range = document.createRange(); range.selectNodeContents(composer); range.collapse(false);
+    // ProseMirror keeps an empty <p> inside the editable textbox. Put the
+    // caret inside that block: a range after it does not accept insertText.
+    const block = composer.lastElementChild?.matches('p,div') ? composer.lastElementChild : composer;
+    const range = document.createRange(); range.selectNodeContents(block); range.collapse(false);
     const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
     return {ok:true};
   }
-  if (op === 'send') return click(document.querySelector('[data-testid="send-button"], #composer-submit-button'));
+  if (op === 'send') return click(document.querySelector('[data-testid="send-button"], #composer-submit-button') ||
+    controls().find(el => el.closest('form')?.querySelector(composerSelector) && /^send$/i.test(label(el))));
   if (op === 'start_report') return click(find(/^start research$/i));
   if (op === 'open_chat_menu') {
     // Project chats may be absent from the sidebar's truncated history. The header

@@ -1,6 +1,6 @@
 (() => {
   const visible = el => !!el && el.getClientRects().length > 0 && !el.closest('[inert],[hidden]');
-  const composer = document.querySelector('#prompt-textarea, [data-testid="composer-text-input"]');
+  const composer = document.querySelector('#prompt-textarea, [data-testid="composer-text-input"], form [role="textbox"][contenteditable="true"]');
   const buttons = [...document.querySelectorAll('button')].filter(visible);
   const label = el => (el.getAttribute('aria-label') || el.innerText || '').trim();
   const turns = [...document.querySelectorAll('[data-message-author-role]')];

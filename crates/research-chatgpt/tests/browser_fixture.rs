@@ -83,6 +83,56 @@ async fn extraction_and_input_against_a_chrome_fixture() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "Requires installed Chrome; synthetic current composer, no account message"]
+async fn current_composer_and_model_picker_fixture() -> Result<()> {
+    let dir = research_core::data_dir()?;
+    let chrome = Chrome::ensure(&dir, &Config::load(&dir)?).await?;
+    let mut page = chrome.open("about:blank").await?;
+    let html = r##"<nav><button aria-label="Send" onclick="window.wrong=true">Send</button></nav>
+      <form><div class="ProseMirror" role="textbox" contenteditable="true" aria-label="New chat in Research"><p data-empty-paragraph="true"><br class="ProseMirror-trailingBreak"></p></div>
+      <button type="button" aria-label="Select ChatGPT model" aria-haspopup="menu" onclick="document.getElementById('menu').hidden=false">Model</button>
+      <button type="button" aria-label="Add files and more" onclick="window.tools=true">+</button>
+      <button type="button" aria-label="Send" onclick="window.sent=true">Send</button></form>
+      <div id="menu" role="menu" hidden><span id="announcement">Instant, 1 of 5.</span>
+      <div role="menuitem" aria-label="Power" aria-describedby="announcement" tabindex="0">
+        <span role="slider" aria-valuenow="0" aria-valuemax="4"></span></div>
+      <div role="menuitemradio" aria-checked="true">Latest</div></div>"##;
+    page.eval(&format!("document.body.innerHTML={}", json!(html)))
+        .await?;
+    page.eval(r##"(() => {
+      const power=document.querySelector('[aria-label="Power"]');
+      power.onkeydown=e=>{
+        const values=['Instant','Light','Standard','High','Extra High'];
+        const slider=power.querySelector('[role="slider"]');
+        const n=Math.max(0,Math.min(4,Number(slider.getAttribute('aria-valuenow'))+(e.key==='ArrowRight'?1:-1)));
+        slider.setAttribute('aria-valuenow',n);
+        document.getElementById('announcement').textContent=values[n]+', '+(n+1)+' of 5.';
+      };
+      document.addEventListener('keydown',e=>{if(e.key==='Escape')document.getElementById('menu').hidden=true});
+    })()"##).await?;
+    assert_eq!(
+        research_chatgpt::inspect(&mut page).await?["composer"],
+        true
+    );
+    let setup = research_chatgpt::prepare(&mut page, &Config::default(), false, true).await?;
+    assert_eq!(setup["reasoning"]["selected"], "Extra High");
+    research_chatgpt::fill(&mut page, "new question pls").await?;
+    research_chatgpt::fill(&mut page, "new question pls").await?;
+    assert_eq!(
+        research_chatgpt::inspect(&mut page).await?["composer_text"],
+        "new question pls"
+    );
+    research_chatgpt::send(&mut page).await?;
+    assert_eq!(
+        page.eval("window.sent === true && window.wrong === undefined")
+            .await?,
+        true
+    );
+    chrome.close(&page.id).await?;
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "Requires installed Chrome; synthetic UI only, no account message"]
 async fn composer_plugin_and_subscription_slider_fallback() -> Result<()> {
     let dir = research_core::data_dir()?;
