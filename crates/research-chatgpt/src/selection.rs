@@ -24,6 +24,21 @@ async fn key(page: &mut Page, key: &str, code: u32) -> Result<()> {
     Ok(())
 }
 
+async fn slider_step(page: &mut Page, key_name: &str, code: u32, index: u64) -> Result<Value> {
+    key(page, key_name, code).await?;
+    let mut status = action(page, "reasoning_status", Value::Null).await?;
+    // The live picker may apply its React state update after the key event
+    // returns. A stale immediate read must not be mistaken for a locked tier.
+    for _ in 0..10 {
+        if status["index"].as_u64() != Some(index) || status["ok"] != true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        status = action(page, "reasoning_status", Value::Null).await?;
+    }
+    Ok(status)
+}
+
 pub async fn dismiss(page: &mut Page) -> Result<()> {
     key(page, "Escape", 27).await
 }
@@ -52,8 +67,7 @@ pub async fn reasoning(page: &mut Page, preferences: &[String]) -> Result<Value>
     action(page, "reasoning_focus", Value::Null).await?;
     let mut index = current["index"].as_u64().unwrap_or(0);
     while index > 0 {
-        key(page, "ArrowLeft", 37).await?;
-        let next = action(page, "reasoning_status", Value::Null).await?;
+        let next = slider_step(page, "ArrowLeft", 37, index).await?;
         let next_index = next["index"].as_u64().unwrap_or(index);
         ensure!(
             next_index < index,
@@ -68,8 +82,7 @@ pub async fn reasoning(page: &mut Page, preferences: &[String]) -> Result<Value>
         if index == maximum {
             break;
         }
-        key(page, "ArrowRight", 39).await?;
-        let next = action(page, "reasoning_status", Value::Null).await?;
+        let next = slider_step(page, "ArrowRight", 39, index).await?;
         let next_index = next["index"].as_u64().unwrap_or(index);
         if next_index <= index {
             break;
@@ -90,8 +103,7 @@ pub async fn reasoning(page: &mut Page, preferences: &[String]) -> Result<Value>
     };
     let wanted = selected["index"].as_u64().unwrap();
     while index > wanted {
-        key(page, "ArrowLeft", 37).await?;
-        let next = action(page, "reasoning_status", Value::Null).await?;
+        let next = slider_step(page, "ArrowLeft", 37, index).await?;
         let next_index = next["index"].as_u64().unwrap_or(index);
         ensure!(
             next_index < index,

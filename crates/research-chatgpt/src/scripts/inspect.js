@@ -3,7 +3,10 @@
   const composer = document.querySelector('#prompt-textarea, [data-testid="composer-text-input"], form [role="textbox"][contenteditable="true"]');
   const buttons = [...document.querySelectorAll('button')].filter(visible);
   const label = el => (el.getAttribute('aria-label') || el.innerText || '').trim();
-  const turns = [...document.querySelectorAll('[data-message-author-role]')];
+  const legacyTurns = [...document.querySelectorAll('[data-message-author-role]')];
+  const turns = legacyTurns.length ? legacyTurns.map(el => ({el,role:el.getAttribute('data-message-author-role'),legacy:true})) :
+    [...document.querySelectorAll('[data-content-search-unit-key$=":user"], [data-content-search-unit-key$=":assistant"]')]
+      .map(el => ({el,role:el.getAttribute('data-content-search-unit-key').split(':').at(-1),legacy:false}));
   const editableText = node => {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent.replace(/[\u200b\ufeff]/g,'');
     if (node.nodeType !== Node.ELEMENT_NODE || node.getAttribute('contenteditable') === 'false' || node.hasAttribute('data-inline-selection-pill') || node.matches('button,[role="button"]')) return '';
@@ -42,11 +45,16 @@
       composer?.querySelector('[data-id*="deep_research"],[data-system-hint-type="deep_research"]') ? 'deep_research' : null,
     login_required: buttons.some(b => /^(log in|sign in|sign up)$/i.test(label(b))) && !document.querySelector('[data-testid="profile-button"]'),
     busy: buttons.some(b => /stop (generating|streaming|response)|^stop$/i.test(label(b)) || /stop-button|composer-stop-button/.test(b.dataset.testid || b.id)),
-    turns: turns.map(el => ({id:el.getAttribute('data-message-id'), role:el.getAttribute('data-message-author-role'), text:el.getAttribute('data-message-author-role') === 'user' ? editableText(el).trim() : el.innerText,
-      markdown:markdown(el).replace(/\n{3,}/g,'\n\n').trim(),
-      complete: el.getAttribute('data-message-author-role') === 'assistant' && !el.querySelector('.streaming-animation') &&
-        !!el.closest('.agent-turn,article,[data-testid^="conversation-turn-"]')?.querySelector('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"]'),
-      citations:[...el.querySelectorAll('a[href]')].filter(a => /^https?:/.test(a.href)).map(a => ({url:a.href,title:a.innerText}))})),
+    turns: turns.map(({el,role,legacy}) => {
+      const content = role === 'assistant' && !legacy ? el.querySelector('[data-markdown-text-style="assistant-message"]') || el : el;
+      const container = legacy ? el.closest('.agent-turn,article,[data-testid^="conversation-turn-"]') : el.parentElement?.parentElement?.parentElement;
+      return {id:el.getAttribute('data-message-id') || el.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || null,
+        role, text:role === 'user' ? editableText(el).trim() : content.innerText,
+        markdown:markdown(content).replace(/\n{3,}/g,'\n\n').trim(),
+        complete:role === 'assistant' && !el.querySelector('.streaming-animation') &&
+          !!container?.querySelector(legacy ? '[data-testid="copy-turn-action-button"], button[aria-label="Copy response"]' : 'button[aria-label="Copy"]'),
+        citations:[...content.querySelectorAll('a[href]')].filter(a => /^https?:/.test(a.href)).map(a => ({url:a.href,title:a.innerText}))};
+    }),
     controls: buttons.map(label).filter(Boolean)
   };
 })()

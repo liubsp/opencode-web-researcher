@@ -105,8 +105,10 @@ async fn current_composer_and_model_picker_fixture() -> Result<()> {
         const values=['Instant','Light','Standard','High','Extra High'];
         const slider=power.querySelector('[role="slider"]');
         const n=Math.max(0,Math.min(4,Number(slider.getAttribute('aria-valuenow'))+(e.key==='ArrowRight'?1:-1)));
-        slider.setAttribute('aria-valuenow',n);
-        document.getElementById('announcement').textContent=values[n]+', '+(n+1)+' of 5.';
+        setTimeout(()=>{
+          slider.setAttribute('aria-valuenow',n);
+          document.getElementById('announcement').textContent=values[n]+', '+(n+1)+' of 5.';
+        },500);
       };
       document.addEventListener('keydown',e=>{if(e.key==='Escape')document.getElementById('menu').hidden=true});
     })()"##).await?;
@@ -127,6 +129,48 @@ async fn current_composer_and_model_picker_fixture() -> Result<()> {
         page.eval("window.sent === true && window.wrong === undefined")
             .await?,
         true
+    );
+    chrome.close(&page.id).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Requires installed Chrome; synthetic current turn markup, no account message"]
+async fn current_turn_markup_confirms_submission_and_response() -> Result<()> {
+    let dir = research_core::data_dir()?;
+    let chrome = Chrome::ensure(&dir, &Config::load(&dir)?).await?;
+    let mut page = chrome.open("about:blank").await?;
+    let prompt = "Find the official source.";
+    let html = r##"<main><div class="group"><div><div>
+      <div data-content-search-unit-key="fallback-turn-0:0:user"><div data-user-message-bubble="true">Find the official source.</div>
+      <button aria-label="Copy message">Copy</button></div>
+      <div><div data-content-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-message-ids="reply-1">
+      <h4>ChatGPT said:</h4><div data-markdown-text-style="assistant-message"><p>See <a href="https://example.org/docs">docs</a>.</p></div>
+      </div></div></div><button aria-label="Copy">Copy</button></div></main>"##;
+    page.eval(&format!("document.body.innerHTML={}", json!(html)))
+        .await?;
+    let state = research_chatgpt::inspect(&mut page).await?;
+    assert_eq!(state["turns"].as_array().unwrap().len(), 2);
+    assert!(research_chatgpt::observation::user_turn_confirmed(
+        &state, 0, prompt
+    ));
+    let response = research_chatgpt::observation::response_after(&state, 0, prompt)?.unwrap();
+    assert_eq!(response["id"], "reply-1");
+    assert_eq!(response["complete"], true);
+    assert!(
+        response["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("[docs](https://example.org/docs)")
+    );
+    assert!(research_chatgpt::observation::completion_candidate(
+        &state, response
+    ));
+    page.eval("document.querySelector('button[aria-label=\"Copy\"]').remove()")
+        .await?;
+    assert_eq!(
+        research_chatgpt::inspect(&mut page).await?["turns"][1]["complete"],
+        false
     );
     chrome.close(&page.id).await?;
     Ok(())
