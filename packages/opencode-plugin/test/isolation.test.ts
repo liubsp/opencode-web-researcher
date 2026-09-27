@@ -60,5 +60,7 @@ test("saved managed responses can be paged without submitting a new prompt", asy
   const ctx = { agent: "web-researcher", sessionID: "session-a", progress: async () => {} } as unknown as ToolContext;
   const result = await tool.execute({ id: "managed-request", offset: 0, limit: 4, project: "forged" }, ctx);
   assert.deepEqual(calls, [{ op: "response_content", id: "managed-request", offset: 0, limit: 4, project: "project-a" }]);
-  assert.match(result.content, /"next_offset":4/);
+  const content = result.content;
+  assert.ok(typeof content === "string");
+  assert.match(content, /"next_offset":4/);
 });
