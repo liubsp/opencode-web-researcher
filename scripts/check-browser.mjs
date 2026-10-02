@@ -8,7 +8,7 @@ const home = await mkdtemp(join(tmpdir(), "research-fixture-"));
 await writeFile(join(home, "fixture-owned"), "Synthetic browser fixtures only\n");
 let result;
 try {
-  result = spawnSync("cargo", ["test", "-p", "research-chatgpt", "--test", "browser_fixture", "--locked", "--", "--ignored", "--test-threads=1"], {
+  result = spawnSync("cargo", ["test", "-p", "research-chatgpt", "--test", "browser_fixture", "--locked", "--", "--ignored", "--test-threads=1", "--nocapture"], {
     stdio: "inherit", env: { ...process.env, WEB_RESEARCH_FIXTURE_HOME: home },
     timeout: 180_000, killSignal: "SIGKILL",
   });

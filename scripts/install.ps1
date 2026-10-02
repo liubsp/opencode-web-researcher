@@ -27,7 +27,8 @@ if ($Project) { $Project = (Resolve-Path -LiteralPath $Project).Path }
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
 $lock = [IO.File]::Open((Join-Path $InstallDir 'install.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-$stage = Join-Path ([IO.Path]::GetTempPath()) ('web-research-install-' + [guid]::NewGuid())
+# Keep native linker output paths short even with a nested TEMP directory and a full commit ref.
+$stage = Join-Path ([IO.Path]::GetTempPath()) ('wr-' + [guid]::NewGuid().ToString('N').Substring(0,16))
 $server = Join-Path $InstallDir 'bin\opencode-web-researcher.exe'
 $legacyServer = $server
 $dataHome = [IO.Path]::GetFullPath($homeDir)
@@ -41,7 +42,9 @@ try {
     $archive = Join-Path $stage 'source.zip'
     Invoke-WebRequest "https://github.com/liubsp/opencode-web-researcher/archive/$([uri]::EscapeDataString($Ref)).zip" -OutFile $archive
     Expand-Archive $archive (Join-Path $stage 'source')
-    $source = (Get-ChildItem (Join-Path $stage 'source') -Directory | Select-Object -First 1).FullName
+    $extracted = (Get-ChildItem (Join-Path $stage 'source') -Directory | Select-Object -First 1).FullName
+    $source = Join-Path $stage 'src'
+    Move-Item -LiteralPath $extracted -Destination $source
     }
     Push-Location $source
     try {

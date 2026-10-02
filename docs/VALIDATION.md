@@ -75,6 +75,8 @@ the conversation appeared under that project in the sidebar. The migrated login 
 - Isolated CLI lifecycle checks cover graceful activation, retained unsent request identity,
   idempotent activation, and preferred-executable bootstrap. The Windows installer also passed
   with a locked legacy executable and an application directory separate from its data home.
+- Remote source download, compilation, and isolated runtime activation passed with a full commit
+  reference and nested Windows TEMP directory after shortening the installer's build staging layout.
 - Installed binary identity and immutable plugin revision were confirmed in the running system.
   OpenCode and its agents were not restarted. A loaded read-only tool succeeded and rejected a
   non-research agent; an isolated test through the actual OpenCode kernel confirmed interruption
@@ -120,9 +122,9 @@ the conversation appeared under that project in the sidebar. The migrated login 
 
 ## In progress
 
-The Windows bootstrap installer was exercised from a local source checkout, including installed
-runtime verification. The remote-download one-liner and macOS bootstrap still need separate
-verification; shell syntax checks are not evidence of macOS execution.
+The Windows bootstrap installer was exercised from local and remotely downloaded source, including
+installed runtime verification. The published remote-download one-liner and macOS bootstrap still
+need separate verification; shell syntax checks are not evidence of macOS execution.
 
 - Optional Deep Research end-to-end flow, including clarification and long report completion.
 - Windows/macOS CI covers builds, tests, isolated Chrome fixtures, runtime activation, and packages.
