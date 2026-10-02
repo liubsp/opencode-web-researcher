@@ -128,7 +128,8 @@ verification; shell syntax checks are not evidence of macOS execution.
 
 - Optional Deep Research end-to-end flow, including clarification and long report completion.
 - Windows/macOS CI covers builds, tests, isolated Chrome fixtures, runtime activation, and packages.
-  macOS live account behavior remains unverified; synthetic browser checks do not establish it.
+  macOS fixtures start isolated normal Chrome directly because hosted-runner LaunchServices stalls.
+  They verify CDP/DOM compatibility, not nonactivating desktop launch or live account behavior.
 
 ## Important semantics
 
