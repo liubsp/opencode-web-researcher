@@ -122,9 +122,9 @@ the conversation appeared under that project in the sidebar. The migrated login 
 
 ## In progress
 
-The Windows bootstrap installer was exercised from local and remotely downloaded source, including
-installed runtime verification. The published remote-download one-liner and macOS bootstrap still
-need separate verification; shell syntax checks are not evidence of macOS execution.
+The published Windows bootstrap script and its remote source download were exercised in an isolated
+installation, including compilation and runtime verification. macOS bootstrap still needs separate
+verification; shell syntax checks are not evidence of macOS execution.
 
 - Optional Deep Research end-to-end flow, including clarification and long report completion.
 - Windows/macOS CI covers builds, tests, isolated Chrome fixtures, runtime activation, and packages.

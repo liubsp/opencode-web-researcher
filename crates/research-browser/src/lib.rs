@@ -324,7 +324,7 @@ impl Chrome {
             .map_err(|_| anyhow::anyhow!("Invalid bootstrap path"))?
             .to_string();
         drop(reservation);
-        launch::background(
+        let mut launcher = launch::background(
             &chrome_path(config)?,
             &launch_arguments(&profile_arg, port, &marker),
         )?;
@@ -335,6 +335,7 @@ impl Chrome {
             activity: Some(activity.clone()),
         };
         for _ in 0..60 {
+            launcher.check()?;
             tokio::time::sleep(Duration::from_millis(500)).await;
             // Prove this listener contains the unpredictable launch marker before recording ownership.
             // This avoids adopting an unrelated Chrome if another process wins the port allocation race.

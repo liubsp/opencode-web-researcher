@@ -1,7 +1,30 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-#[cfg(any(target_os = "macos", test))]
+pub struct Launcher {
+    helper: Option<std::process::Child>,
+}
+
+impl Launcher {
+    pub fn check(&mut self) -> Result<()> {
+        if let Some(child) = &mut self.helper
+            && let Some(status) = child.try_wait()?
+        {
+            anyhow::ensure!(status.success(), "Background Chrome launcher failed");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Launcher {
+    fn drop(&mut self) {
+        if let Some(child) = self.helper.take() {
+            // Only the launch helper is owned here, never the running Chrome process.
+            let _ = wait_launcher(child, std::time::Duration::ZERO);
+        }
+    }
+}
+
 fn wait_launcher(
     mut child: std::process::Child,
     timeout: std::time::Duration,
@@ -12,8 +35,9 @@ fn wait_launcher(
             return Ok(status);
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            if child.kill().is_ok() {
+                let _ = child.wait();
+            }
             anyhow::bail!("Background Chrome launcher timed out");
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
@@ -44,7 +68,7 @@ fn quote(value: &str) -> String {
 }
 
 #[cfg(windows)]
-pub fn background(executable: &Path, args: &[String]) -> Result<()> {
+pub fn background(executable: &Path, args: &[String]) -> Result<Launcher> {
     use std::{
         mem::{size_of, zeroed},
         os::windows::ffi::OsStrExt,
@@ -96,11 +120,11 @@ pub fn background(executable: &Path, args: &[String]) -> Result<()> {
         CloseHandle(process.hProcess);
     }
     // No foreground-window activation or simulated focus changes.
-    Ok(())
+    Ok(Launcher { helper: None })
 }
 
 #[cfg(target_os = "macos")]
-pub fn background(executable: &Path, args: &[String]) -> Result<()> {
+pub fn background(executable: &Path, args: &[String]) -> Result<Launcher> {
     use std::process::{Command, Stdio};
     let app = executable
         .ancestors()
@@ -116,17 +140,15 @@ pub fn background(executable: &Path, args: &[String]) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .context("Cannot start macOS Chrome launcher")?;
-    // LaunchServices can stall without exposing a CDP endpoint. Never block the worker indefinitely.
-    let status = wait_launcher(child, std::time::Duration::from_secs(15))?;
-    anyhow::ensure!(
-        status.success(),
-        "macOS could not open Chrome in the background"
-    );
-    Ok(())
+    // LaunchServices may wait for app registration after Chrome starts. The caller proves readiness
+    // through the unique launch marker and CDP, checking helper failure without waiting for its exit.
+    Ok(Launcher {
+        helper: Some(child),
+    })
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn background(executable: &Path, args: &[String]) -> Result<()> {
+pub fn background(executable: &Path, args: &[String]) -> Result<Launcher> {
     use std::process::{Command, Stdio};
     Command::new(executable)
         .args(args)
@@ -135,7 +157,7 @@ pub fn background(executable: &Path, args: &[String]) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .context("Cannot start Chrome")?;
-    Ok(())
+    Ok(Launcher { helper: None })
 }
 
 #[cfg(test)]
@@ -172,6 +194,25 @@ mod tests {
         let error = wait_launcher(helper(true)?, std::time::Duration::from_millis(100))
             .expect_err("stalled launcher must fail");
         assert!(error.to_string().contains("launcher timed out"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        Ok(())
+    }
+
+    #[test]
+    fn background_helper_does_not_block_readiness_checks() -> Result<()> {
+        let child = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "launch::tests::launcher_helper_process"])
+            .env("RESEARCH_TEST_LAUNCHER_STALL", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        let started = std::time::Instant::now();
+        let mut launcher = Launcher {
+            helper: Some(child),
+        };
+        launcher.check()?;
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        drop(launcher);
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         Ok(())
     }
