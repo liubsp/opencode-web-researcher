@@ -28,6 +28,22 @@ test("package rename replaces the legacy registration without duplicating tools"
   }
 });
 
+test("an application installed elsewhere retains its explicit research data home", () => {
+  const updated = mergePlugin("{}", "file:///custom-app/plugin", "/custom-app/bin/server", "/separate-data-home");
+  assert.deepEqual(parse(updated).plugins[0].options, { binary: "/custom-app/bin/server", home: "/separate-data-home" });
+});
+
+test("immutable plugin revisions replace the same installation without duplicating tools", () => {
+  const root = "file:///app/node_modules/opencode-web-researcher";
+  const legacy = "file:///app/node_modules/web-research-opencode/";
+  const previous = `${root}/dist/updates/0123456789abcdef`;
+  const next = "file:///app/plugin-revisions/opencode-web-researcher/fedcba9876543210";
+  const source = JSON.stringify({ plugins: [root, legacy, { package: previous, options: { binary: "old" } }, "unrelated"] });
+  const updated = mergePlugin(source, next, "new", "/data");
+  assert.deepEqual(parse(updated).plugins, ["unrelated", { package: next, options: { binary: "new", home: "/data" } }]);
+  assert.deepEqual(parse(mergePlugin(updated, next, "new", "/data")).plugins, parse(updated).plugins);
+});
+
 test("global setup uses the global agents directory and preserves customized instructions", async () => {
   const root = await mkdtemp(join(tmpdir(), "research-global-"));
   try {

@@ -14,6 +14,31 @@ fn input(key: &str, thread: Option<String>) -> Submit {
 }
 
 #[test]
+fn confirmed_deletion_receipts_survive_reload_without_remote_response_data() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("db");
+    let mut store = Store::open(&path)?;
+    let job = store.submit(&input("receipt", None), Config::default(), 10)?;
+    store.cancel(&job.id, 11)?;
+    let mut thread = store.thread(&job.thread_id)?;
+    thread.url = Some("https://chatgpt.com/c/ours".into());
+    thread.state = "deletion_pending".into();
+    thread.deletion_receipt = Some(research_core::DeletionReceipt {
+        url: thread.url.clone().unwrap(),
+        confirmed_at: 12,
+        evidence: "ui_response".into(),
+    });
+    store.save_thread(&thread)?;
+    drop(store);
+    let restored = Store::open(&path)?.thread(&thread.id)?;
+    let receipt = restored.deletion_receipt.unwrap();
+    assert_eq!(receipt.confirmed_at, 12);
+    assert_eq!(receipt.evidence, "ui_response");
+    assert_eq!(receipt.url, "https://chatgpt.com/c/ours");
+    Ok(())
+}
+
+#[test]
 fn randomized_expiry_survives_reload_and_controls_followup_admission() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("db");
@@ -90,6 +115,123 @@ fn retries_cannot_change_payload_or_scope() -> Result<()> {
     changed.project = "b".into();
     assert!(store.submit(&changed, Config::default(), 11).is_err());
     assert_eq!(store.thread(&job.thread_id)?.prompts, 1);
+    Ok(())
+}
+
+#[test]
+fn shared_drafts_require_a_matching_provably_unsent_start() -> Result<()> {
+    let mut store = Store::open(std::path::Path::new(":memory:"))?;
+    let config = Config {
+        chatgpt_project_url: Some("https://chatgpt.com/g/g-p-example/project".into()),
+        ..Config::default()
+    };
+    let mut job = store.submit(&input("first", None), config.clone(), 10)?;
+    assert!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .is_none()
+    );
+    let mut thread = store.thread(&job.thread_id)?;
+    thread.target = Some("owned-target".into());
+    store.save_thread(&thread)?;
+    assert!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .is_none()
+    );
+    job.draft = Some(job.prompt.clone());
+    store.save_job(&job)?;
+    assert_eq!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .unwrap()
+            .id,
+        job.id
+    );
+    assert!(
+        store
+            .unsent_draft(
+                "unrelated user draft",
+                config.chatgpt_project_url.as_deref()
+            )?
+            .is_none()
+    );
+    assert!(store.unsent_draft(&job.prompt, None)?.is_none());
+    store.finish(&mut job, "failed", None, 11)?;
+    assert!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .is_some()
+    );
+    job.baseline = Some(0);
+    store.save_job(&job)?;
+    assert!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .is_none()
+    );
+    job.baseline = None;
+    job.submitted_at = Some(12);
+    store.save_job(&job)?;
+    assert!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .is_none()
+    );
+    job.submitted_at = None;
+    job.new_thread = false;
+    store.save_job(&job)?;
+    assert!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .is_none()
+    );
+    job.new_thread = true;
+    job.state = "cancelled".into();
+    store.save_job(&job)?;
+    assert!(
+        store
+            .unsent_draft(&job.prompt, config.chatgpt_project_url.as_deref())?
+            .is_some()
+    );
+    Ok(())
+}
+
+#[test]
+fn preparation_retry_refreshes_result_and_preserves_prior_failure() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut store = Store::open(&dir.path().join("db"))?;
+    let request = input("first", None);
+    let mut job = store.submit(&request, Config::default(), 10)?;
+    store.finish(&mut job, "failed", Some("composer mismatch".into()), 11)?;
+    store.checkpoint(&job, dir.path())?;
+    let folder = dir
+        .path()
+        .join("transcripts")
+        .join(&job.thread_id)
+        .join(&job.id);
+    let failed = std::fs::read(folder.join("exchange.md"))?;
+    job = store.submit(&request, Config::default(), 12)?;
+    store.checkpoint(&job, dir.path())?;
+    job.state = "waiting".into();
+    job.submitted_at = Some(13);
+    job.response = Some(serde_json::json!({"markdown":"recovered answer"}));
+    store.finish(&mut job, "completed", None, 14)?;
+    store.checkpoint(&job, dir.path())?;
+    assert_eq!(
+        std::fs::read(folder.join("preparation-failure.md"))?,
+        failed
+    );
+    let completed = std::fs::read(folder.join("exchange.md"))?;
+    assert!(String::from_utf8(completed.clone())?.contains("recovered answer"));
+    store.checkpoint(&job, dir.path())?;
+    assert_eq!(std::fs::read(folder.join("exchange.md"))?, completed);
+    std::fs::write(folder.join("exchange.md"), "user-modified exchange")?;
+    assert!(store.checkpoint(&job, dir.path()).is_err());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("exchange.md"))?,
+        "user-modified exchange"
+    );
     Ok(())
 }
 
@@ -270,12 +412,106 @@ fn ambiguous_submission_blocks_new_work_until_observation_only_recovery() -> Res
     store.save_job(&first)?;
     store.submit(&input("two", None), Config::default(), 3)?;
     assert!(store.next_job()?.is_none());
-    assert!(store.cancel(&first.id, 4).is_err());
     let recovered = store.reconcile(&first.id)?;
     assert_eq!(recovered.state, "submitting");
     assert_eq!(recovered.baseline, Some(0));
     assert_eq!(store.next_job()?.unwrap().id, first.id);
     assert_eq!(store.thread(&first.thread_id)?.prompts, 1);
+    assert_eq!(store.cancel(&first.id, 5)?.state, "cancel_requested");
+    assert_eq!(store.cancel(&first.id, 6)?.state, "cancel_requested");
+    assert_eq!(store.next_job()?.unwrap().id, first.id);
+    assert_eq!(store.thread(&first.thread_id)?.prompts, 1);
+    Ok(())
+}
+
+#[test]
+fn worker_progress_and_completion_cannot_erase_cancellation() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("db");
+    let mut worker = Store::open(&path)?;
+    let mut api = Store::open(&path)?;
+    let mut stale = worker.submit(&input("race", None), Config::default(), 1)?;
+    stale.state = "waiting".into();
+    stale.submitted_at = Some(2);
+    stale.baseline = Some(0);
+    worker.save_job(&stale)?;
+    api.cancel(&stale.id, 3)?;
+    stale.response = Some(serde_json::json!({"markdown":"partial"}));
+    assert!(worker.save_progress(&mut stale)?);
+    assert_eq!(stale.state, "cancel_requested");
+    assert_eq!(api.job(&stale.id)?.state, "cancel_requested");
+    worker.finish(&mut stale, "completed", None, 4)?;
+    assert_eq!(api.job(&stale.id)?.state, "cancel_requested");
+    worker.finish(&mut stale, "cancelled", None, 5)?;
+    stale.state = "timed_out".into();
+    assert!(!worker.save_progress(&mut stale)?);
+    assert_eq!(stale.state, "cancelled");
+    assert_eq!(api.thread(&stale.thread_id)?.prompts, 1);
+    Ok(())
+}
+
+#[test]
+fn preparing_cancellation_prevents_send_and_releases_budget_once() -> Result<()> {
+    let mut store = Store::open(std::path::Path::new(":memory:"))?;
+    let mut stale = store.submit(&input("preparing", None), Config::default(), 1)?;
+    stale.state = "preparing".into();
+    store.save_job(&stale)?;
+    assert_eq!(store.cancel(&stale.id, 2)?.state, "cancelled");
+    stale.draft = Some(stale.prompt.clone());
+    assert!(!store.save_progress(&mut stale)?);
+    assert_eq!(store.job(&stale.id)?.draft, stale.draft);
+    stale.state = "submitting".into();
+    stale.submitted_at = Some(3);
+    assert!(!store.save_progress(&mut stale)?);
+    assert_eq!(stale.state, "cancelled");
+    store.finish(&mut stale, "failed", None, 4)?;
+    assert_eq!(store.thread(&stale.thread_id)?.prompts, 0);
+    Ok(())
+}
+
+#[test]
+fn cancelled_draft_receipt_survives_but_cannot_resurrect_or_resend_work() -> Result<()> {
+    let mut store = Store::open(std::path::Path::new(":memory:"))?;
+    let mut job = store.submit(&input("cancelled-draft", None), Config::default(), 1)?;
+    let mut thread = store.thread(&job.thread_id)?;
+    thread.target = Some("owned".into());
+    store.save_thread(&thread)?;
+    job.state = "preparing".into();
+    store.save_job(&job)?;
+    store.cancel(&job.id, 2)?;
+    // Insertion finished after cancellation, before its receipt could be saved.
+    job.draft = Some(job.prompt.clone());
+    assert!(!store.save_progress(&mut job)?);
+    assert_eq!(job.state, "cancelled");
+    assert!(store.unsent_draft(&job.prompt, None)?.is_some());
+    assert!(
+        store
+            .unsent_thread_draft(&job.prompt, &thread.id)?
+            .is_some()
+    );
+    assert!(store.unsent_draft("edited human draft", None)?.is_none());
+    assert_eq!(
+        store
+            .submit(&input("cancelled-draft", None), Config::default(), 3)?
+            .state,
+        "cancelled"
+    );
+    assert_eq!(store.thread(&thread.id)?.prompts, 0);
+    store.consume_draft(&job.id, &job.prompt)?;
+    assert!(store.unsent_draft(&job.prompt, None)?.is_none());
+    assert!(
+        store
+            .unsent_thread_draft(&job.prompt, &thread.id)?
+            .is_none()
+    );
+    assert!(store.consume_draft(&job.id, &job.prompt).is_err());
+    job.submitted_at = Some(4);
+    store.save_job(&job)?;
+    assert!(
+        store
+            .unsent_thread_draft(&job.prompt, &thread.id)?
+            .is_none()
+    );
     Ok(())
 }
 

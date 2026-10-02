@@ -1130,6 +1130,7 @@ dependencies = [
  "research-browser",
  "research-core",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -1152,6 +1153,7 @@ dependencies = [
  "anyhow",
  "axum",
  "fs2",
+ "futures-util",
  "reqwest",
  "research-browser",
  "research-chatgpt",
@@ -1161,7 +1163,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

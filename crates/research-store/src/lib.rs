@@ -143,6 +143,7 @@ impl Store {
                 cleanup_error: None,
                 cleanup_attempts: 0,
                 cleanup_retry_at: 0,
+                deletion_receipt: None,
             }
         };
         thread.prompts += 1;
@@ -160,6 +161,8 @@ impl Store {
             send_after: None,
             submitted_at: None,
             baseline: None,
+            draft: None,
+            submission: None,
             selection: None,
             response: None,
             error: None,
@@ -214,6 +217,57 @@ impl Store {
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
 
+    /// Project landing pages share drafts across tabs. Only a matching service-owned,
+    /// provably unsent start in the same remote project can be cleared.
+    pub fn unsent_draft(&self, text: &str, project_url: Option<&str>) -> Result<Option<Job>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT data FROM jobs WHERE state IN ('queued','pacing','preparing','failed','cancelled') ORDER BY rowid DESC")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let job: Job = serde_json::from_str(&row?)?;
+            if job.new_thread
+                && recorded_draft(&job, text)
+                && self.thread(&job.thread_id)?.target.is_some()
+                && self.thread(&job.thread_id)?.chatgpt_project_url.as_deref() == project_url
+            {
+                return Ok(Some(job));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn unsent_thread_draft(&self, text: &str, thread: &str) -> Result<Option<Job>> {
+        if self.thread(thread)?.target.is_none() {
+            return Ok(None);
+        }
+        Ok(self
+            .jobs(thread)?
+            .into_iter()
+            .rev()
+            .find(|job| recorded_draft(job, text)))
+    }
+
+    pub fn consume_draft(&mut self, id: &str, text: &str) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let data: String =
+            tx.query_row("SELECT data FROM jobs WHERE id=?", [id], |row| row.get(0))?;
+        let mut job: Job = serde_json::from_str(&data)?;
+        ensure!(
+            recorded_draft(&job, text),
+            "Managed draft provenance changed"
+        );
+        job.draft = None;
+        tx.execute(
+            "UPDATE jobs SET data=? WHERE id=?",
+            params![serde_json::to_string(&job)?, id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn save_thread(&self, thread: &Thread) -> Result<()> {
         self.conn.execute(
             "UPDATE threads SET data=? WHERE id=?",
@@ -228,6 +282,43 @@ impl Store {
             params![job.state, serde_json::to_string(job)?, job.id],
         )?;
         Ok(())
+    }
+
+    /// Browser observations must never erase a cancellation or reopen terminal work.
+    pub fn save_progress(&mut self, job: &mut Job) -> Result<bool> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let data: String = tx.query_row("SELECT data FROM jobs WHERE id=?", [&job.id], |row| {
+            row.get(0)
+        })?;
+        let mut current: Job = serde_json::from_str(&data)?;
+        if current.terminal() {
+            if current.state == "cancelled"
+                && current.submitted_at.is_none()
+                && job.submitted_at.is_none()
+                && job.draft.is_some()
+            {
+                // Cleanup-only provenance: keep cancellation terminal and never resend.
+                current.draft = job.draft.clone();
+                tx.execute(
+                    "UPDATE jobs SET data=? WHERE id=?",
+                    params![serde_json::to_string(&current)?, current.id],
+                )?;
+                tx.commit()?;
+            }
+            *job = current;
+            return Ok(false);
+        }
+        if current.state == "cancel_requested" {
+            job.state = current.state;
+        }
+        tx.execute(
+            "UPDATE jobs SET state=?,data=? WHERE id=?",
+            params![job.state, serde_json::to_string(job)?, job.id],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn next_job(&self) -> Result<Option<Job>> {
@@ -314,15 +405,39 @@ impl Store {
         error: Option<String>,
         at: i64,
     ) -> Result<()> {
-        let mut thread = self.thread(&job.thread_id)?;
-        let definitely_unsent = matches!(job.state.as_str(), "queued" | "pacing" | "preparing");
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let data: String = tx.query_row("SELECT data FROM jobs WHERE id=?", [&job.id], |row| {
+            row.get(0)
+        })?;
+        let current: Job = serde_json::from_str(&data)?;
+        if current.terminal() {
+            *job = current;
+            return Ok(());
+        }
+        if current.state == "cancel_requested" && state != "cancelled" {
+            job.state = current.state;
+            tx.execute(
+                "UPDATE jobs SET state=?,data=? WHERE id=?",
+                params![job.state, serde_json::to_string(job)?, job.id],
+            )?;
+            tx.commit()?;
+            return Ok(());
+        }
+        let data: String = tx.query_row(
+            "SELECT data FROM threads WHERE id=?",
+            [&job.thread_id],
+            |row| row.get(0),
+        )?;
+        let mut thread: Thread = serde_json::from_str(&data)?;
+        let definitely_unsent = job.submitted_at.is_none() && current.submitted_at.is_none();
         if definitely_unsent && matches!(state, "failed" | "cancelled") {
             thread.prompts = thread.prompts.saturating_sub(1);
         }
         job.state = state.into();
         job.error = error;
         thread.active_at = at;
-        let tx = self.conn.transaction()?;
         tx.execute(
             "UPDATE jobs SET state=?,data=? WHERE id=?",
             params![job.state, serde_json::to_string(job)?, job.id],
@@ -344,12 +459,22 @@ impl Store {
         if job.terminal() {
             return Ok(job);
         }
-        if matches!(job.state.as_str(), "waiting" | "timed_out") {
+        if matches!(
+            job.state.as_str(),
+            "submitting"
+                | "waiting"
+                | "timed_out"
+                | "cancel_requested"
+                | "submission_unknown"
+                | "needs_attention"
+        ) && job.submitted_at.is_some()
+            && job.baseline.is_some()
+        {
             job.state = "cancel_requested".into();
             self.save_job(&job)?;
             return Ok(job);
         }
-        if !matches!(job.state.as_str(), "queued" | "pacing") {
+        if !matches!(job.state.as_str(), "queued" | "pacing" | "preparing") {
             bail!("already_started: submission is being reconciled; cannot safely cancel yet");
         }
         self.finish(&mut job, "cancelled", None, at)?;
@@ -433,7 +558,27 @@ impl Store {
                     .and_then(|r| r["markdown"].as_str())
                     .unwrap_or("[No response captured]")
             );
-            write_once(&folder.join("exchange.md"), markdown.as_bytes())?;
+            let path = folder.join("exchange.md");
+            if let Ok(saved) = std::fs::read(&path)
+                && saved != markdown.as_bytes()
+            {
+                // A safe preparation retry keeps its request ID. Preserve the earlier
+                // empty failure before refreshing the result; arbitrary edits stay protected.
+                let failed = format!(
+                    "## User\n\n{}\n\n## ChatGPT (failed)\n\n[No response captured]\n",
+                    job.prompt
+                );
+                ensure!(
+                    saved == failed.as_bytes()
+                        && matches!(job.state.as_str(), "completed" | "cancelled"),
+                    "Saved transcript differs: {}",
+                    path.display()
+                );
+                write_once(&folder.join("preparation-failure.md"), &saved)?;
+                write_atomic(&path, markdown.as_bytes())?;
+            } else {
+                write_once(&path, markdown.as_bytes())?;
+            }
             remove_legacy_json(&folder.join("exchange.json"))?;
         }
         self.export_thread(&self.thread(&job.thread_id)?, dir)?;
@@ -468,6 +613,18 @@ impl Store {
     }
 }
 
+fn recorded_draft(job: &Job, text: &str) -> bool {
+    matches!(
+        job.state.as_str(),
+        "queued" | "pacing" | "preparing" | "failed" | "cancelled"
+    ) && job.submitted_at.is_none()
+        && job.baseline.is_none()
+        && job.selection.is_none()
+        && job.response.is_none()
+        && job.draft.as_deref() == Some(text)
+        && research_core::canonical_prompt(&job.prompt) == text
+}
+
 fn remove_legacy_json(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -485,6 +642,10 @@ fn write_once(path: &Path, bytes: &[u8]) -> Result<()> {
         );
         return Ok(());
     }
+    write_atomic(path, bytes)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("tmp");
     let mut file = std::fs::File::create(&tmp)?;

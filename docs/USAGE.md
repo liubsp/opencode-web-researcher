@@ -70,19 +70,25 @@ opencode-web-researcher shutdown
 - **Submission unknown or needs attention:** fix the browser issue, then ask the agent to reconcile
   the existing request. That only observes; it doesn't resend. Ambiguous work pauses new dispatch.
 - **Timed out:** partial results remain available and observation continues. Don't restart the chat.
+- **Cleanup blocked:** `status` reports the backlog, last error, attempts, and retry deadline.
+  `research_health` and ordinary `research_get`/`research_wait` results expose this project's
+  operation status. An inaccessible conversation stays unconfirmed; it is not counted as deleted.
 
 `browser-check` exercises a blank tab and checks minimized state and `navigator.webdriver`.
 `browser-inspect` reports readiness and control labels, not transcripts. Don't navigate or manually
-send messages in an active research tab. Stop the daemon before replacing its executable on Windows;
-Chrome remains open after shutdown. Cancellation cannot undo a prompt already sent.
+send messages in an active research tab. Use the installer to update the runtime; activation selects
+an immutable build while preserving Chrome and admitted requests. OpenCode need not restart.
+Cancellation cannot undo a prompt already sent. Health summarizes recorded operation failures,
+not a live guarantee that every ChatGPT control is currently available.
 
 ## Agent tools
 
 | Tool | Purpose |
 | --- | --- |
+| `research_health` | Inspect blocked cleanup and requests needing attention |
 | `research_start` | Start a thread; keep the same request key for retries |
 | `research_send` | Send a new follow-up in that thread |
-| `research_wait` / `research_get` | Wait up to 60 seconds / inspect results |
+| `research_wait` / `research_get` | Wait (five minutes by default) / inspect results |
 | `research_list` / `research_resume` | Find threads / access an unexpired thread without sending |
 | `research_archive` | Read saved local transcripts |
 | `research_cancel` | Cancel queued work or request generation stop |

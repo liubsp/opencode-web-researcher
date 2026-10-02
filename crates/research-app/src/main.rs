@@ -15,10 +15,16 @@ struct Cli {
 enum Command {
     /// Internal background service entrypoint.
     #[command(hide = true)]
-    Serve,
+    Serve {
+        #[arg(long, hide = true)]
+        home: Option<std::path::PathBuf>,
+    },
     /// Ensure the service is ready and print its descriptor for the plugin.
     #[command(hide = true)]
     Connect,
+    /// Internal installer cutover; preserves the browser and admitted requests.
+    #[command(hide = true)]
+    Activate,
     /// Open the persistent research Chrome profile for manual ChatGPT sign-in.
     Login,
     /// Display shared paths, configuration, and Chrome discovery.
@@ -40,10 +46,17 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let dir = data_dir()?;
     match cli.command {
-        Command::Serve => research_server::serve(dir).await?,
+        Command::Serve { home } => research_server::serve(home.unwrap_or(dir)).await?,
         Command::Connect => {
             let service = client::ensure_running(dir, &std::env::current_exe()?).await?;
             println!("{}", serde_json::to_string(&service)?);
+        }
+        Command::Activate => {
+            client::activate(dir, &std::env::current_exe()?).await?;
+            println!(
+                "Preferred research server is active: {}",
+                research_core::BUILD_ID
+            );
         }
         Command::Status => {
             let service = client::discover(&dir).await?;

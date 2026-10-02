@@ -25,7 +25,10 @@ pub async fn verify_project(page: &mut Page, expected: &str) -> Result<()> {
     ready(page).await?;
     let actual = page.eval("location.origin + location.pathname").await?;
     ensure!(
-        actual.as_str() == Some(expected),
+        actual
+            .as_str()
+            .is_some_and(|url| research_core::valid_project_url(url)
+                && research_browser::same_project_url(url, expected)),
         "project_unavailable: ChatGPT redirected away from the configured project"
     );
     let heading = page.eval("[...document.querySelectorAll('main h1, main h2')].some(el => el.getClientRects().length && el.textContent.trim())").await?;
@@ -64,23 +67,44 @@ pub async fn prepare(
     deep: bool,
     new_thread: bool,
 ) -> Result<Value> {
-    ready(page).await?;
+    let initial = ready(page).await?;
+    ensure!(
+        deep || initial["mode"].is_null(),
+        "research_mode_mismatch: ordinary chat requested but a composer mode is active"
+    );
     if config.model != "default" {
         selection::model(page, &config.model).await?;
     }
     if new_thread && deep {
         let mode = "Deep research";
-        let mut selected = action(page, "select_mode", json!(mode)).await?;
-        if selected["ok"] != true {
-            action(page, "open_tools", Value::Null).await?;
-            tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut selected = Value::Null;
+        let mut opened = false;
+        for _ in 0..30 {
             selected = action(page, "select_mode", json!(mode)).await?;
+            if selected["ok"] == true {
+                break;
+            }
+            if !opened {
+                opened = action(page, "open_tools", Value::Null).await?["ok"] == true;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         ensure!(
             selected["ok"] == true,
             "research_mode_unavailable: {selected}"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut applied = false;
+        for _ in 0..30 {
+            if inspect(page).await?["mode"] == "deep_research" {
+                applied = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        ensure!(
+            applied,
+            "research_mode_unavailable: Deep Research selection was not applied"
+        );
     }
     let reasoning = if deep {
         json!({"level":"mode-managed"})
@@ -89,6 +113,14 @@ pub async fn prepare(
     };
     let state = inspect(page).await?;
     ensure!(
+        if deep {
+            !new_thread || state["mode"] == "deep_research"
+        } else {
+            state["mode"].is_null()
+        },
+        "research_mode_mismatch: composer mode changed during preparation"
+    );
+    ensure!(
         state["busy"] != true,
         "thread_busy: ChatGPT is still generating"
     );
@@ -96,10 +128,20 @@ pub async fn prepare(
 }
 
 pub async fn fill(page: &mut Page, text: &str) -> Result<()> {
+    fill_managed(page, text, |_| Ok(())).await
+}
+
+/// Record successful insertion before verification so a failed round-trip retains draft provenance.
+pub async fn fill_managed(
+    page: &mut Page,
+    text: &str,
+    mut written: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    let text = research_core::canonical_prompt(text);
     let existing = inspect(page).await?;
     if existing["composer_text"]
         .as_str()
-        .is_some_and(|value| value.trim() == text.trim())
+        .is_some_and(|value| value == text)
     {
         return Ok(());
     }
@@ -118,9 +160,25 @@ pub async fn fill(page: &mut Page, text: &str) -> Result<()> {
     page.command("Input.insertText", json!({"text":text}))
         .await?;
     let state = inspect(page).await?;
+    let actual = state["composer_text"].as_str().unwrap_or_default();
+    written(actual)?;
+    ensure!(actual == text, "composer_mismatch: not sending");
+    Ok(())
+}
+
+/// The caller must preserve and identify an unsent managed prompt before clearing it.
+pub async fn clear_managed_draft(page: &mut Page, expected: &str) -> Result<()> {
+    // Check and delete in one browser evaluation; never clear an edited or unrelated draft.
+    let result = page
+        .eval(&format!(
+            "(() => {{ const state = {INSPECT}; if (state.busy || state.composer_text !== {}) return {{ok:false,error:'draft_changed'}}; return ({ACTION})({{op:'clear_draft'}}); }})()",
+            json!(expected.trim())
+        ))
+        .await?;
+    ensure!(result["ok"] == true, "managed_draft_not_cleared: {result}");
     ensure!(
-        state["composer_text"].as_str().unwrap_or_default().trim() == text.trim(),
-        "composer_mismatch: not sending"
+        inspect(page).await?["composer_text"].as_str() == Some(""),
+        "managed_draft_not_cleared: composer still contains text"
     );
     Ok(())
 }
@@ -138,37 +196,75 @@ pub async fn start_deep_report(page: &mut Page) -> Result<bool> {
     Ok(action(page, "start_report", Value::Null).await?["ok"] == true)
 }
 
-pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<()> {
-    // Cleanup opens the exact saved URL when needed. A deleted conversation may redirect
-    // home with an explicit deletion notice, allowing recovery after a missed confirmation toast.
-    if action(page, "deleted", json!(expected_url)).await?["ok"] == true {
-        return Ok(());
-    }
-    let state = inspect(page).await?;
-    ensure!(
-        state["url"].as_str() == Some(expected_url),
-        "Deletion target changed"
-    );
+pub async fn stop(page: &mut Page) -> Result<bool> {
+    Ok(action(page, "stop", Value::Null).await?["ok"] == true)
+}
+
+pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<&'static str> {
     ensure!(
         research_browser::conversation_url(expected_url),
         "Missing exact conversation URL"
     );
+    // Cleanup opens the exact saved URL when needed. A deleted conversation may redirect
+    // home with an explicit deletion notice, allowing recovery after a missed confirmation toast.
+    if action(page, "deleted", json!(expected_url)).await?["ok"] == true {
+        return Ok("ui_notice");
+    }
+    // The composer can mount before conversation hydration/menu controls. Wait
+    // for an identity-bound menu rather than mistaking that intermediate UI for failure.
+    let mut opened = false;
+    for attempt in 0..60 {
+        if action(page, "deleted", json!(expected_url)).await?["ok"] == true {
+            return Ok("ui_notice");
+        }
+        let Ok(state) = action(page, "deletion_state", json!(expected_url)).await else {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue; // bounded hydration/navigation context changes
+        };
+        ensure!(
+            state["unavailable"] != true,
+            "deletion_access_unavailable: owned conversation is inaccessible; deletion is not confirmed"
+        );
+        if state["matching"] == true {
+            let result = action(page, "open_chat_menu", json!(expected_url)).await?;
+            ensure!(
+                result["error"] != "ambiguous_conversation_menu",
+                "delete_unavailable: ambiguous conversation toolbar"
+            );
+            if result["ok"] == true {
+                opened = true;
+                break;
+            }
+        }
+        if attempt == 19 {
+            // Older project chats may be absent from the truncated sidebar, and
+            // the header's generic More menu can contain Plugins but no Delete.
+            // The project landing page provides an ID-bound authoritative row.
+            if let Some((project, _)) = expected_url.rsplit_once("/c/") {
+                let landing = format!("{project}/project");
+                if research_core::valid_project_url(&landing) {
+                    page.command("Page.navigate", json!({"url":landing}))
+                        .await?;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
     ensure!(
-        action(page, "open_chat_menu", json!(expected_url)).await?["ok"] == true,
-        "delete_unavailable: cannot locate the exact conversation menu"
+        opened,
+        "delete_unavailable: cannot locate the owned conversation menu after hydration"
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
     ensure!(
-        action(page, "select", json!(["Delete"])).await?["ok"] == true,
-        "delete_unavailable"
+        wait_cleanup_control(page, "delete_menu_item", expected_url).await,
+        "delete_unavailable: owned menu has no unique Delete control"
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    page.watch_deletion(expected_url).await?;
     ensure!(
-        action(page, "confirm_delete", Value::Null).await?["ok"] == true,
-        "delete_confirmation_unavailable"
+        wait_cleanup_control(page, "confirm_delete", expected_url).await,
+        "delete_confirmation_unavailable: owned deletion dialog is missing or ambiguous"
     );
-    if wait_for_deletion(page, expected_url).await {
-        return Ok(());
+    if let Some(evidence) = wait_for_deletion(page, expected_url).await {
+        return Ok(evidence);
     }
     // Some project chats redirect home without a deletion toast. Reopening the
     // exact saved URL produces ChatGPT's explicit deleted-conversation notice.
@@ -179,22 +275,37 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
     }) {
         page.command("Page.navigate", json!({"url":expected_url}))
             .await?;
-        if wait_for_deletion(page, expected_url).await {
-            return Ok(());
+        if let Some(evidence) = wait_for_deletion(page, expected_url).await {
+            return Ok(evidence);
         }
     }
     bail!("deletion_unknown: confirmation was clicked but deletion could not be verified")
 }
 
-async fn wait_for_deletion(page: &mut Page, expected_url: &str) -> bool {
+async fn wait_cleanup_control(page: &mut Page, op: &str, expected_url: &str) -> bool {
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        // Navigation may briefly destroy the JavaScript execution context.
-        if let Ok(result) = action(page, "deleted", json!(expected_url)).await
+        if let Ok(result) = action(page, op, json!(expected_url)).await
             && result["ok"] == true
         {
             return true;
         }
     }
     false
+}
+
+async fn wait_for_deletion(page: &mut Page, expected_url: &str) -> Option<&'static str> {
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Navigation may briefly destroy the JavaScript execution context.
+        if let Ok(result) = action(page, "deleted", json!(expected_url)).await
+            && result["ok"] == true
+        {
+            return Some("ui_notice");
+        }
+        if page.deletion_acknowledged().await {
+            return Some("ui_response");
+        }
+    }
+    None
 }

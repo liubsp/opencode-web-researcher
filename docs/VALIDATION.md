@@ -64,16 +64,69 @@ Search selection and no final period. It completed with Extra High and no error.
 confirmed the conversation URL used the configured project's `/g/g-p-…/c/…` route, and
 the conversation appeared under that project in the sidebar. The migrated login remained valid.
 
+### Reliability audit and installed recovery
+
+- All 16 isolated Chrome fixtures pass, including multiline/zero-width text, mixed turn markup,
+  literal whitespace, accessible Stop controls, scoped model selection, and applied mode checks.
+  Persistence tests cover cancellation-preserving writes and single-use draft-cleanup receipts.
+- Existing real research and its follow-up completed through OpenCode tools with full response
+  pagination. After deployment, the original saved answer remained retrievable in two pages;
+  recovery and verification did not resend submitted prompts or revive the cancelled smoke test.
+- Isolated CLI lifecycle checks cover graceful activation, retained unsent request identity,
+  idempotent activation, and preferred-executable bootstrap. The Windows installer also passed
+  with a locked legacy executable and an application directory separate from its data home.
+- Installed binary identity and immutable plugin revision were confirmed in the running system.
+  OpenCode and its agents were not restarted. A loaded read-only tool succeeded and rejected a
+  non-research agent; an isolated test through the actual OpenCode kernel confirmed interruption
+  closes the underlying HTTP wait after one batch, with zero submissions.
+- Registered plugin revisions survive npm package replacement; legacy revision paths are retained.
+  The pinned Promise adapter's missing cancellation forwarding is bridged at the native Effect boundary.
+- Two 90-second read-only production observations recorded no window-state transitions, restoration,
+  or tab creation/deletion. This does not establish the cause or absence of intermittent flicker.
+  Chrome was preserved during server activation and later closed under its normal inactivity policy.
+- Formatting, Clippy, Rust workspace tests, TypeScript checks/tests, release/plugin builds, and
+  package/privacy inspection passed locally. Local Windows checks do not establish macOS live
+  browser compatibility.
+
+### Cleanup compatibility and operational health
+
+- Current live project-row menus and confirmation dialogs were inspected without confirming deletion.
+  Header More opens Plugins, not Delete; older chats can be absent from truncated sidebar history.
+  Cleanup now falls back to the exact chat row in its owned project, with bounded hydration waits.
+- Regression fixtures cover friendly project-slug changes, immutable chat/project identity, accessible
+  row controls, trigger-bound menus, the Delete chat dialog button, and rejection of unrelated or
+  ambiguous controls. Generic redirects, access errors, and unbound deletion toasts are not proof.
+- Health and ordinary retrieval results surface failed creation, ambiguous requests, and blocked
+  overdue cleanup. API tests cover project scoping, immediate explicit cleanup retries, and degraded
+  configuration without breaking protocol discovery. Stop retry spacing survives observation yields.
+- Cleanup retries reuse owned home/project redirects instead of accumulating tabs; unrelated
+  conversations and project destinations are rejected. The PowerShell installer passed isolated
+  locked-launcher cutover and separate-data-home tests using .NET SHA-256 without Get-FileHash.
+- Deletion verification observes the exact UI-generated request and its successful acknowledgement,
+  without issuing ChatGPT account API calls. Receipts contain only the owned URL, evidence type, and
+  timestamp, and survive a restart between remote deletion and local retirement. Tests reject other
+  chats, non-deletion updates, redirects, failed HTTP responses, and contradictory acknowledgements.
+- Two disposable live requests completed with one prompt each. An independent observer captured the
+  first UI deletion's successful acknowledgement; its diagnostic record was reconciled from that
+  evidence after a backup. The final installed retest retired automatically with a durable UI-response
+  receipt after recovering from a transient menu-readiness failure. No original research was resent.
+- Previously visible overdue chats are absent from the project. Three historical records remain
+  explicitly unconfirmed because reopening them now yields access denial and no deletion receipt was
+  captured at the time. Their local archives are retained; disappearance is not retroactive proof.
+- Final installed server and loaded plugin identities were verified through the existing OpenCode
+  service without restarting OpenCode or agents. All original saved requests and nine within-retention
+  thread records were unchanged; the project retained its seven originally visible retained chats,
+  with no overdue or untracked rows. Operation health exposes the three unresolved cleanup records.
+
 ## In progress
 
-The Windows bootstrap installer was exercised from a local source checkout: release build, npm
-pack/install, stable per-user paths, project setup, daemon shutdown and restart all completed.
-The installed server health check and global-plugin reload passed. The remote-download
-one-liner and macOS bootstrap still need separate verification.
+The Windows bootstrap installer was exercised from a local source checkout, including installed
+runtime verification. The remote-download one-liner and macOS bootstrap still need separate
+verification; shell syntax checks are not evidence of macOS execution.
 
 - Optional Deep Research end-to-end flow, including clarification and long report completion.
-- Windows/macOS CI build, test, and package jobs passed for the earlier CI correction. macOS live
-  browser behavior remains unverified; Windows browser checks do not establish macOS behavior.
+- Windows/macOS CI covers builds, tests, isolated Chrome fixtures, runtime activation, and packages.
+  macOS live account behavior remains unverified; synthetic browser checks do not establish it.
 
 ## Important semantics
 

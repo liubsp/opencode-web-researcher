@@ -44,17 +44,33 @@ pub async fn dismiss(page: &mut Page) -> Result<()> {
 }
 
 pub async fn reasoning(page: &mut Page, preferences: &[String]) -> Result<Value> {
-    let result = action(page, "open_reasoning", Value::Null).await?;
-    ensure!(result["ok"] == true, "reasoning_unavailable: {result}");
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let current = action(page, "reasoning_status", Value::Null).await?;
-    if current["ok"] != true {
-        // Older UI exposes menu items rather than a reasoning-effort slider.
-        let selected = action(page, "select", json!(preferences)).await?;
-        ensure!(selected["ok"] == true, "reasoning_unavailable: {selected}");
-        dismiss(page).await?;
-        return Ok(selected);
+    let mut result = Value::Null;
+    for _ in 0..30 {
+        result = action(page, "open_reasoning", Value::Null).await?;
+        if result["ok"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
+    ensure!(result["ok"] == true, "reasoning_unavailable: {result}");
+    let mut current = Value::Null;
+    for _ in 0..30 {
+        current = action(page, "reasoning_status", Value::Null).await?;
+        if current["ok"] == true {
+            if current["selected"].as_str().is_some_and(|s| !s.is_empty()) {
+                break;
+            }
+        } else {
+            // Older UI exposes menu items rather than a reasoning-effort slider.
+            let selected = action(page, "select", json!(preferences)).await?;
+            if selected["ok"] == true {
+                dismiss(page).await?;
+                return Ok(selected);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    ensure!(current["ok"] == true, "reasoning_unavailable: {current}");
     if normalized(current["selected"].as_str().unwrap_or_default()) == normalized(&preferences[0]) {
         dismiss(page).await?;
         return Ok(current);
@@ -121,17 +137,38 @@ pub async fn reasoning(page: &mut Page, preferences: &[String]) -> Result<Value>
 }
 
 pub async fn model(page: &mut Page, model: &str) -> Result<()> {
+    let mut opened = Value::Null;
+    for _ in 0..30 {
+        opened = action(page, "open_model", Value::Null).await?;
+        if opened["ok"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
     ensure!(
-        action(page, "open_model", Value::Null).await?["ok"] == true,
+        opened["ok"] == true,
         "model_unavailable: cannot open model picker"
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let mut selected = action(page, "select", json!([model])).await?;
-    if selected["ok"] != true {
+    let mut selected = Value::Null;
+    for _ in 0..30 {
+        selected = action(page, "select_model", json!(model)).await?;
+        if selected["ok"] == true {
+            break;
+        }
         action(page, "expand_model", Value::Null).await?;
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        selected = action(page, "select", json!([model])).await?;
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
     ensure!(selected["ok"] == true, "model_unavailable: {selected}");
-    dismiss(page).await
+    // A click is not proof React applied the requested model. Reopen and check its selection.
+    dismiss(page).await?;
+    for _ in 0..30 {
+        action(page, "open_model", Value::Null).await?;
+        let status = action(page, "model_status", Value::Null).await?;
+        if normalized(status["selected"].as_str().unwrap_or_default()) == normalized(model) {
+            return dismiss(page).await;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    dismiss(page).await?;
+    bail!("model_unavailable: selected model could not be verified")
 }

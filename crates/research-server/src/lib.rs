@@ -1,5 +1,6 @@
 mod api;
 pub mod client;
+mod launch;
 mod read_chats;
 mod transcripts;
 mod worker;
@@ -67,6 +68,18 @@ pub fn lock(path: &Path) -> Result<File> {
 
 pub async fn serve(dir: PathBuf) -> Result<()> {
     secure_directory(&dir)?;
+    #[cfg(windows)]
+    let _stderr = launch::daemon_stderr(&dir)?;
+    let result = serve_inner(dir).await;
+    #[cfg(windows)]
+    if let Err(error) = &result {
+        // Record startup errors before our private stderr handle is dropped.
+        eprintln!("Research daemon failed: {error:#}");
+    }
+    result
+}
+
+async fn serve_inner(dir: PathBuf) -> Result<()> {
     let _lifetime = lock(&dir.join("service.lock"))?;
     Config::load(&dir)?;
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;

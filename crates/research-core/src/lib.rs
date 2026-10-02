@@ -8,6 +8,10 @@ use std::{
 };
 
 pub const PROTOCOL: u32 = 1;
+pub const BUILD_ID: &str = match option_env!("WEB_RESEARCH_BUILD_ID") {
+    Some(id) => id,
+    None => "development",
+};
 pub const PROMPT_LIMIT: u32 = 10;
 
 fn default_retention(value: &u64) -> bool {
@@ -200,6 +204,13 @@ impl Submit {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeletionReceipt {
+    pub url: String,
+    pub confirmed_at: i64,
+    pub evidence: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Thread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatgpt_project_url: Option<String>,
@@ -219,6 +230,8 @@ pub struct Thread {
     pub cleanup_attempts: u32,
     #[serde(default, skip_serializing_if = "zero_i64")]
     pub cleanup_retry_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletion_receipt: Option<DeletionReceipt>,
 }
 
 impl Thread {
@@ -279,6 +292,13 @@ fn zero_i64(value: &i64) -> bool {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubmissionAnchor {
+    pub prior_turn_ids: Vec<String>,
+    pub last_turn_id: Option<String>,
+    pub user_turn_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
     pub id: String,
     pub thread_id: String,
@@ -294,6 +314,10 @@ pub struct Job {
     pub send_after: Option<i64>,
     pub submitted_at: Option<i64>,
     pub baseline: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<SubmissionAnchor>,
     #[serde(default)]
     pub selection: Option<serde_json::Value>,
     pub response: Option<serde_json::Value>,
@@ -312,6 +336,11 @@ impl Job {
     pub fn terminal(&self) -> bool {
         matches!(self.state.as_str(), "completed" | "failed" | "cancelled")
     }
+}
+
+/// Chromium normalizes line endings on insertion. Keep all meaningful characters.
+pub fn canonical_prompt(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n").trim().into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

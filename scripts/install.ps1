@@ -6,16 +6,21 @@ param(
     [string]$SourceDirectory
 )
 $ErrorActionPreference = 'Stop'
-if (-not $InstallDir) {
-    $homeDir = if ($env:WEB_RESEARCH_HOME) { $env:WEB_RESEARCH_HOME }
+$homeDir = if ($env:WEB_RESEARCH_HOME) { $env:WEB_RESEARCH_HOME }
         elseif (Test-Path "$env:LOCALAPPDATA\web-research-opencode" -PathType Container) { "$env:LOCALAPPDATA\web-research-opencode" }
         else { "$env:LOCALAPPDATA\opencode-web-researcher" }
-    $InstallDir = Join-Path $homeDir 'app'
-}
+if (-not $InstallDir) { $InstallDir = Join-Path $homeDir 'app' }
 if ($Global -and $Project) { throw 'Choose -Global or -Project, not both' }
 function Run([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Program failed ($LASTEXITCODE)" }
+}
+function FileHash([string]$Path) {
+    # Some PowerShell installations omit the Get-FileHash script module.
+    $stream = [IO.File]::OpenRead($Path)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose(); $stream.Dispose() }
 }
 foreach ($tool in @('node','npm.cmd','cargo')) { Get-Command $tool -ErrorAction Stop | Out-Null }
 if ($Project) { $Project = (Resolve-Path -LiteralPath $Project).Path }
@@ -24,9 +29,11 @@ New-Item -ItemType Directory -Force $InstallDir | Out-Null
 $lock = [IO.File]::Open((Join-Path $InstallDir 'install.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('web-research-install-' + [guid]::NewGuid())
 $server = Join-Path $InstallDir 'bin\opencode-web-researcher.exe'
+$legacyServer = $server
+$dataHome = [IO.Path]::GetFullPath($homeDir)
+$previousHome = $env:WEB_RESEARCH_HOME
+$env:WEB_RESEARCH_HOME = $dataHome
 $runtime = Join-Path $InstallDir 'runtime'
-$restart = $false
-$startupLock = $null
 try {
     New-Item -ItemType Directory $stage | Out-Null
     if ($SourceDirectory) { $source = (Resolve-Path -LiteralPath $SourceDirectory).Path }
@@ -46,84 +53,51 @@ try {
     $package = (Get-ChildItem $stage -Filter '*.tgz' | Select-Object -First 1).FullName
     # Build succeeds before interrupting the installed daemon.
     $candidate = Join-Path $source 'target\release\opencode-web-researcher.exe'
+    # Immutable paths cannot be locked by clients executing a previous build.
+    $hash = FileHash $candidate
+    $server = Join-Path $InstallDir ("bin\updates\$hash\opencode-web-researcher.exe")
+    New-Item -ItemType Directory -Force (Split-Path $server) | Out-Null
+    if (-not (Test-Path $server)) { Copy-Item $candidate $server }
+    if ((FileHash $server) -ne $hash) { throw 'Installed server build differs from candidate' }
     $previousAgent = Join-Path $stage 'previous-agent.md'
     $bundledAgent = Join-Path $runtime 'node_modules\opencode-web-researcher\agents\web-researcher.md'
     if (Test-Path $bundledAgent) { Copy-Item $bundledAgent $previousAgent }
-    $replaceBinary = -not (Test-Path $server) -or (Get-FileHash $candidate).Hash -ne (Get-FileHash $server).Hash
-    if ($replaceBinary) {
-        # Prevent another client from auto-starting the old executable between
-        # shutdown and replacement. Rust bootstrappers use this same lock.
-        $startupPath = Join-Path (Split-Path $InstallDir -Parent) 'startup.lock'
-        for ($attempt = 0; $attempt -lt 120 -and -not $startupLock; $attempt++) {
-            try { $startupLock = [IO.File]::Open($startupPath, 'OpenOrCreate', 'ReadWrite', 'None') }
-            catch { Start-Sleep -Seconds 1 }
-        }
-        if (-not $startupLock) { throw 'Could not acquire research service startup lock' }
-        # A stopped service is normal; Windows PowerShell turns native stderr into errors.
-        $previousErrorAction = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            & $candidate status *> $null
-            $restart = $LASTEXITCODE -eq 0
-        } finally { $ErrorActionPreference = $previousErrorAction }
-        if ($restart) {
-            $serviceDescriptor = Join-Path (Split-Path $InstallDir -Parent) 'service.json'
-            $servicePid = if (Test-Path $serviceDescriptor) { (Get-Content $serviceDescriptor -Raw | ConvertFrom-Json).pid } else { $null }
-            Run $candidate @('shutdown')
-            # The RPC acknowledges shutdown before the daemon releases its executable.
-            # A long read may still be finishing; never replace a running binary.
-            if ($servicePid) {
-                for ($attempt = 0; $attempt -lt 120 -and (Get-Process -Id $servicePid -ErrorAction SilentlyContinue); $attempt++) {
-                    Start-Sleep -Seconds 1
-                }
-                if (Get-Process -Id $servicePid -ErrorAction SilentlyContinue) {
-                    throw 'Research service did not exit after shutdown; installation was not applied'
-                }
-            }
-        }
-    }
+    $previousRevisions = Join-Path $stage 'previous-revisions'
+    $legacyRevisions = Join-Path $runtime 'node_modules\opencode-web-researcher\dist\updates'
+    if (Test-Path $legacyRevisions) { Copy-Item $legacyRevisions $previousRevisions -Recurse }
+    $replaceBinary = -not (Test-Path $legacyServer) -or (FileHash $candidate) -ne (FileHash $legacyServer)
     New-Item -ItemType Directory -Force (Split-Path $server),$runtime | Out-Null
-    if ($replaceBinary) {
-        $copied = $false
-        $copyError = $null
-        for ($attempt = 0; $attempt -lt 30; $attempt++) {
-            try { Copy-Item $candidate $server -Force; $copied = $true; break }
-            catch { $copyError = $_.Exception; Start-Sleep -Seconds 1 }
+    try { Run npm.cmd @('install','--prefix',$runtime,'--omit=dev','--no-audit','--no-fund',$package) }
+    finally {
+        if (Test-Path $previousRevisions) {
+            New-Item -ItemType Directory -Force $legacyRevisions | Out-Null
+            Get-ChildItem $previousRevisions | Copy-Item -Destination $legacyRevisions -Recurse -Force
         }
-        if (-not $copied) { throw "Server executable could not be replaced ($($copyError.GetType().Name), $($copyError.HResult))" }
     }
-    Run npm.cmd @('install','--prefix',$runtime,'--omit=dev','--no-audit','--no-fund',$package)
+    Run node @((Join-Path $source 'scripts\revise-plugin.mjs'),(Join-Path $runtime 'node_modules\opencode-web-researcher'))
     Run $server @('configure')
-    $installerArgs = @()
+    $installerArgs = @('--home',$dataHome)
     if (Test-Path $previousAgent) { $installerArgs += @('--previous-agent',$previousAgent) }
     if ($Global) {
         Run node (@((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--global','--binary',$server) + $installerArgs)
     } elseif ($Project) {
         Run node (@((Join-Path $runtime 'node_modules\opencode-web-researcher\dist\install.js'),'--project',$Project,'--binary',$server) + $installerArgs)
     }
-    Write-Output "Installed server: $server"
-    Write-Output 'Restart the OpenCode service (opencode service restart) to load updated plugin tools. Existing research data/login are preserved.'
-} finally {
-    try {
-        if ($startupLock) { $startupLock.Dispose() }
-        if ($restart -and (Test-Path $server)) {
-            # Keep a detached daemon from inheriting the installer's captured output pipe.
-            $info = New-Object System.Diagnostics.ProcessStartInfo
-            $info.FileName = $server
-            $info.Arguments = 'connect'
-            $info.UseShellExecute = $false
-            $info.CreateNoWindow = $true
-            $info.RedirectStandardOutput = $true
-            $info.RedirectStandardError = $true
-            $process = [System.Diagnostics.Process]::Start($info)
-            $stdout = $process.StandardOutput.ReadToEndAsync()
-            $stderr = $process.StandardError.ReadToEndAsync()
-            $process.WaitForExit()
-            if ($process.ExitCode -ne 0) { throw 'Installed server could not restart; inspect service.log' }
-            $process.Dispose()
+    # Activation holds the shared startup lock through replacement registration.
+    # It never closes Chrome, and all newer launchers consult its preferred-build pointer.
+    Run $server @('activate')
+    if ($replaceBinary) {
+        $copied = $false
+        for ($attempt = 0; $attempt -lt 30 -and -not $copied; $attempt++) {
+            try { Copy-Item $candidate $legacyServer -Force; $copied = $true }
+            catch { Start-Sleep -Seconds 1 }
         }
-    } finally {
-        $lock.Dispose()
-        if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+        if (-not $copied) { throw 'New daemon is active, but the legacy launcher is still locked; installation requires completing that replacement' }
     }
+    Write-Output "Installed server: $server"
+    Write-Output 'Reload OpenCode configuration to load updated tools. Already-running calls retain their previous definitions. Existing research data/login are preserved.'
+} finally {
+    $env:WEB_RESEARCH_HOME = $previousHome
+    $lock.Dispose()
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 }

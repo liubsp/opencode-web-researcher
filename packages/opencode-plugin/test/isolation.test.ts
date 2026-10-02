@@ -64,3 +64,82 @@ test("saved managed responses can be paged without submitting a new prompt", asy
   assert.ok(typeof content === "string");
   assert.match(content, /"next_offset":4/);
 });
+
+test("health exposes blocked cleanup without changing trusted scope or submitting work", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const status = { service_status: { state: "attention_required", cleanup: { blocked: [{ error: "deletion_access_unavailable" }] } } };
+  const tool = tools("project-a", async input => { calls.push(input); return status; }).find(t => t.name === "research_health")!;
+  const context = { agent: "web-researcher", sessionID: "session-a", progress: async () => {} } as unknown as ToolContext;
+  const result = await tool.execute({ project: "forged" }, context);
+  assert.deepEqual(calls, [{ op: "health", project: "project-a" }]);
+  assert.deepEqual(JSON.parse(result.content as string), status);
+});
+
+test("one default wait batches short RPCs without returning to the agent every minute", async t => {
+  let clock = 0;
+  t.mock.method(Date, "now", () => clock);
+  const calls: Record<string, unknown>[] = [];
+  const tool = tools("project-a", async input => {
+    calls.push(input);
+    clock += Number(input.seconds) * 1000;
+    return { request: { state: "waiting" } };
+  }).find(t => t.name === "research_wait")!;
+  const ctx = { agent: "web-researcher", sessionID: "session-a", progress: async () => {} } as unknown as ToolContext;
+  await tool.execute({ id: "request" }, ctx);
+  assert.equal(clock, 300_000);
+  assert.equal(calls.length, 5);
+  assert.ok(calls.every(c => c.op === "wait" && c.seconds === 60 && c.project === "project-a"));
+  calls.length = 0;
+  await tool.execute({ id: "request", seconds: 45 }, ctx);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].seconds, 45);
+  calls.length = 0;
+  await tool.execute({ id: "request", seconds: 600 }, ctx);
+  assert.equal(calls.length, 10);
+});
+
+test("wait returns immediately on completion, failure, timeout, or required attention", async () => {
+  for (const state of ["completed", "failed", "cancelled", "timed_out", "submission_unknown", "needs_attention"]) {
+    let calls = 0;
+    const tool = tools("project-a", async () => {
+      calls++;
+      return { request: { state } };
+    }).find(t => t.name === "research_wait")!;
+    const ctx = { agent: "web-researcher", sessionID: "session-a", progress: async () => {} } as unknown as ToolContext;
+    await tool.execute({ id: "request" }, ctx);
+    assert.equal(calls, 1);
+  }
+});
+
+test("import waits use the same default interval and stop on a completed capture", async t => {
+  let clock = 0;
+  t.mock.method(Date, "now", () => clock);
+  let calls = 0;
+  const tool = tools("project-a", async input => {
+    clock += Number(input.seconds) * 1000;
+    return { state: ++calls === 2 ? "completed" : "reading" };
+  }).find(t => t.name === "research_wait")!;
+  const ctx = { agent: "web-researcher", sessionID: "session-a", progress: async () => {} } as unknown as ToolContext;
+  await tool.execute({ id: "read-request" }, ctx);
+  assert.equal(calls, 2);
+  assert.equal(clock, 120_000);
+});
+
+test("aborted tool contexts cannot submit and interrupted waits stop batching", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  const context = { agent: "web-researcher", sessionID: "session-a", progress: async () => {}, signal: controller.signal } as unknown as ToolContext;
+  const start = tools("project-a", async () => { calls++; return {}; })[0];
+  await assert.rejects(start.execute({ prompt: "question", request_key: "key" }, context), { name: "AbortError" });
+  assert.equal(calls, 0);
+  const waiting = new AbortController();
+  const wait = tools("project-a", async (_input, signal) => {
+    assert.equal(signal, waiting.signal);
+    calls++;
+    waiting.abort();
+    return { request: { state: "waiting" } };
+  }).find(t => t.name === "research_wait")!;
+  await assert.rejects(wait.execute({ id: "request" }, { ...context, signal: waiting.signal } as unknown as ToolContext), { name: "AbortError" });
+  assert.equal(calls, 1);
+});

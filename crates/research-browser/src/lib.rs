@@ -10,6 +10,7 @@ use std::{
 };
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
+mod deletion;
 mod launch;
 
 pub struct Page {
@@ -17,6 +18,7 @@ pub struct Page {
     socket: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     sequence: u64,
     activity: Option<PathBuf>,
+    deletion: Option<deletion::Watch>,
 }
 
 impl Page {
@@ -36,6 +38,7 @@ impl Page {
             socket,
             sequence: 0,
             activity: None,
+            deletion: None,
         })
     }
 
@@ -57,6 +60,9 @@ impl Page {
                 match message? {
                     Message::Text(text) => {
                         let value: Value = serde_json::from_str(&text)?;
+                        if let Some(watch) = &mut self.deletion {
+                            watch.event(&value);
+                        }
                         if value["id"] == id {
                             if let Some(error) = value.get("error") {
                                 bail!("CDP {method}: {error}");
@@ -86,6 +92,42 @@ impl Page {
             bail!("Browser script failed: {}", value["exceptionDetails"]);
         }
         Ok(value["result"]["value"].clone())
+    }
+
+    pub async fn watch_deletion(&mut self, expected: &str) -> Result<()> {
+        ensure!(conversation_url(expected), "Invalid deletion target");
+        self.command("Network.enable", json!({})).await?;
+        self.deletion = Some(deletion::Watch::new(expected));
+        Ok(())
+    }
+
+    pub async fn deletion_acknowledged(&mut self) -> bool {
+        let ready = self
+            .deletion
+            .as_ref()
+            .map_or_else(Vec::new, deletion::Watch::ready);
+        for (id, status) in ready {
+            if status == 204 {
+                return true;
+            }
+            let body = match self
+                .command("Network.getResponseBody", json!({"requestId":id}))
+                .await
+            {
+                Ok(value) if value["base64Encoded"] != true => value["body"]
+                    .as_str()
+                    .and_then(|body| serde_json::from_str::<Value>(body).ok())
+                    .unwrap_or(Value::Null),
+                _ => continue,
+            };
+            let watch = self.deletion.as_mut().unwrap();
+            let acknowledged = watch.acknowledged(status, &body);
+            watch.consume(&id);
+            if acknowledged {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -423,6 +465,7 @@ impl Chrome {
                 .await?;
             if let Some(id) = window["windowId"].as_i64()
                 && windows.insert(id)
+                && window["bounds"]["windowState"] != "minimized"
             {
                 browser
                     .command(
@@ -493,7 +536,8 @@ impl Chrome {
                 );
                 if let Some(expected) = url {
                     ensure!(
-                        current.split('?').next() == Some(expected),
+                        same_conversation_url(current, expected)
+                            || current.split('?').next() == Some(expected),
                         "Owned conversation changed"
                     );
                 }
@@ -548,9 +592,104 @@ pub fn conversation_url(value: &str) -> bool {
         })
 }
 
+fn project_key(segment: &str) -> &str {
+    let Some(id) = segment.strip_prefix("g-p-") else {
+        return segment;
+    };
+    if id.len() >= 32
+        && id.as_bytes()[..32].iter().all(u8::is_ascii_hexdigit)
+        && (id.len() == 32 || id.as_bytes()[32] == b'-')
+    {
+        &segment[..36]
+    } else {
+        segment
+    }
+}
+
+pub fn same_project_url(a: &str, b: &str) -> bool {
+    if !valid_chat_url(a) || !valid_chat_url(b) {
+        return false;
+    }
+    let key = |value: &str| {
+        let url = url::Url::parse(value).ok()?;
+        let parts: Vec<_> = url.path().split('/').collect();
+        (parts.len() >= 4 && parts[1] == "g" && parts[2].starts_with("g-p-"))
+            .then(|| project_key(parts[2]).to_owned())
+    };
+    key(a).is_some_and(|project| Some(project) == key(b))
+}
+
+pub fn same_conversation_url(a: &str, b: &str) -> bool {
+    if !conversation_url(a) || !conversation_url(b) {
+        return false;
+    }
+    let key = |value: &str| {
+        let url = url::Url::parse(value).ok()?;
+        let parts: Vec<_> = url.path().split('/').collect();
+        Some(if parts.len() == 3 {
+            (None, parts[2].to_owned())
+        } else {
+            (Some(project_key(parts[2]).to_owned()), parts[4].to_owned())
+        })
+    };
+    key(a) == key(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ui_deletion_acknowledgements_are_observed_through_real_cdp_correlation() -> Result<()>
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            for _ in 0..3 {
+                let message = socket.next().await.unwrap().unwrap();
+                let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "Network.enable" => json!({}),
+                    "Runtime.evaluate" => {
+                        for event in [
+                            json!({"method":"Network.requestWillBeSent","params":{"requestId":"delete-one","request":{"method":"DELETE","url":"https://chatgpt.com/backend-api/conversation/id/ours"}}}),
+                            json!({"method":"Network.responseReceived","params":{"requestId":"delete-one","response":{"url":"https://chatgpt.com/backend-api/conversation/id/ours","status":200}}}),
+                            json!({"method":"Network.loadingFinished","params":{"requestId":"delete-one"}}),
+                        ] {
+                            socket
+                                .send(Message::Text(event.to_string().into()))
+                                .await
+                                .unwrap();
+                        }
+                        json!({"result":{"value":0}})
+                    }
+                    "Network.getResponseBody" => {
+                        assert_eq!(request["params"]["requestId"], "delete-one");
+                        json!({"body":"{\"success\":true}","base64Encoded":false})
+                    }
+                    other => panic!("Unexpected CDP command {other}"),
+                };
+                socket
+                    .send(Message::Text(
+                        json!({"id":request["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut page =
+            Page::connect("synthetic".into(), &format!("ws://127.0.0.1:{port}/test")).await?;
+        page.watch_deletion("https://chatgpt.com/c/ours").await?;
+        assert!(!page.deletion_acknowledged().await);
+        page.eval("0").await?;
+        assert!(page.deletion_acknowledged().await);
+        server.await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn idle_checks_do_not_launch_chrome_or_refresh_activity() -> Result<()> {
@@ -626,6 +765,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn conversation_identity_ignores_project_slugs_but_not_ids_or_scope() {
+        let saved = "https://chatgpt.com/g/g-p-0123456789abcdef0123456789abcdef-research/c/ours";
+        let current = "https://chatgpt.com/g/g-p-0123456789abcdef0123456789abcdef/c/ours";
+        assert!(same_conversation_url(saved, current));
+        assert!(same_conversation_url(
+            saved,
+            &format!("{current}?view=chat")
+        ));
+        assert!(same_project_url(
+            current,
+            &saved.replace("/c/ours", "/project")
+        ));
+        for other in [
+            current.replace("/ours", "/other"),
+            current.replace(
+                "0123456789abcdef0123456789abcdef",
+                "fedcba9876543210fedcba9876543210",
+            ),
+            current.replace("chatgpt.com", "chatgpt.com.evil.test"),
+            "https://chatgpt.com/c/ours".into(),
+            "about:blank".into(),
+        ] {
+            assert!(!same_conversation_url(saved, &other));
+        }
+    }
+
     #[tokio::test]
     async fn cdp_correlates_replies_while_ignoring_interleaved_events() -> Result<()> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -655,6 +821,99 @@ mod tests {
                 .await
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn background_reconnect_reuses_tabs_and_minimize_is_idempotent() -> Result<()> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for initially_minimized in [true, false] {
+            let http = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let port = http.local_addr()?.port();
+            let websocket = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let ws_port = websocket.local_addr()?.port();
+            let updates = Arc::new(AtomicUsize::new(0));
+            let writes = updates.clone();
+            let minimized = Arc::new(AtomicBool::new(initially_minimized));
+            let http_server = tokio::spawn(async move {
+                for _ in 0..3 {
+                    let (mut stream, _) = http.accept().await.unwrap();
+                    let mut buffer = [0; 4096];
+                    let mut headers = Vec::new();
+                    loop {
+                        let count = stream.read(&mut buffer).await.unwrap();
+                        assert!(count > 0);
+                        headers.extend_from_slice(&buffer[..count]);
+                        if headers.windows(4).any(|part| part == b"\r\n\r\n") {
+                            break;
+                        }
+                        assert!(headers.len() < 16384);
+                    }
+                    assert!(headers.starts_with(b"GET /json/list "));
+                    let body = json!([{"id":"one","type":"page","url":"https://chatgpt.com/c/owned","webSocketDebuggerUrl":format!("ws://127.0.0.1:{ws_port}/test")},{"id":"two","type":"page"}]).to_string();
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            let ws_server = tokio::spawn(async move {
+                for _ in 0..3 {
+                    let (stream, _) = websocket.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    while let Some(Ok(Message::Text(raw))) = socket.next().await {
+                        let request: Value = serde_json::from_str(&raw).unwrap();
+                        let result = match request["method"].as_str().unwrap() {
+                            "Browser.getWindowForTarget" => {
+                                json!({"windowId":7,"bounds":{"windowState":if minimized.load(Ordering::SeqCst) {"minimized"} else {"maximized"}}})
+                            }
+                            "Browser.setWindowBounds" => {
+                                assert_eq!(
+                                    request["params"],
+                                    json!({"windowId":7,"bounds":{"windowState":"minimized"}})
+                                );
+                                writes.fetch_add(1, Ordering::SeqCst);
+                                minimized.store(true, Ordering::SeqCst);
+                                json!({})
+                            }
+                            "Emulation.setFocusEmulationEnabled" => {
+                                assert_eq!(request["params"], json!({"enabled":true}));
+                                json!({})
+                            }
+                            other => panic!("Unexpected foreground/window command: {other}"),
+                        };
+                        socket
+                            .send(Message::Text(
+                                json!({"id":request["id"],"result":result})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .unwrap();
+                    }
+                }
+            });
+            let chrome = Chrome {
+                port,
+                http: reqwest::Client::builder().no_proxy().build()?,
+                websocket: format!("ws://127.0.0.1:{ws_port}/test"),
+                activity: None,
+            };
+            chrome.minimize().await?;
+            chrome.minimize().await?;
+            let page = chrome
+                .reconnect(Some("one"), Some("https://chatgpt.com/c/owned"))
+                .await?;
+            assert_eq!(page.id, "one");
+            drop(page);
+            assert_eq!(
+                updates.load(Ordering::SeqCst),
+                usize::from(!initially_minimized)
+            );
+            http_server.await?;
+            ws_server.await?;
+        }
         Ok(())
     }
 }

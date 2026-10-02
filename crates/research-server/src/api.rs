@@ -66,16 +66,72 @@ fn scoped_job(state: &State, input: &Value) -> Result<research_core::Job> {
     Ok(job)
 }
 
+fn service_status(state: &State, project: Option<&str>) -> Value {
+    let inspect = || -> Result<Value> {
+        let config = Config::load(&state.dir)?;
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Store lock poisoned"))?;
+        let mut pending = 0;
+        let mut confirmed_deleted = 0;
+        let mut cleanup_issues = Vec::new();
+        let mut request_issues = Vec::new();
+        for thread in store.threads(project)? {
+            if thread.state == "remote_deleted" {
+                if thread.url.is_some() {
+                    confirmed_deleted += 1;
+                }
+                continue;
+            }
+            let jobs = store.jobs(&thread.id)?;
+            for job in &jobs {
+                if matches!(
+                    job.state.as_str(),
+                    "failed" | "needs_attention" | "submission_unknown" | "timed_out"
+                ) {
+                    request_issues
+                        .push(json!({"request_id":job.id,"state":job.state,"error":job.error}));
+                }
+            }
+            let due = thread.state != "active"
+                || thread.prompts >= 10
+                || now() >= thread.inactivity_deadline(&config);
+            if due && jobs.iter().all(research_core::Job::terminal) {
+                pending += 1;
+                if let Some(error) = &thread.cleanup_error {
+                    cleanup_issues.push(
+                        json!({"thread_id":thread.id,"state":thread.state,"error":error,
+                        "attempts":thread.cleanup_attempts,"retry_at":thread.cleanup_retry_at}),
+                    );
+                }
+            }
+        }
+        Ok(
+            json!({"state":if cleanup_issues.is_empty() && request_issues.is_empty() {"ready"} else {"attention_required"},
+            "cleanup":{"pending":pending,"confirmed_chat_deletions":confirmed_deleted,"blocked":cleanup_issues},
+            "requests_needing_attention":request_issues}),
+        )
+    };
+    inspect()
+        .unwrap_or_else(|error| json!({"state":"attention_required","error":error.to_string()}))
+}
+
 async fn dispatch(state: &State, input: Value) -> Result<Value> {
     let op = field(&input, "op")?;
     if matches!(op, "get" | "wait" | "cancel" | "read_content")
         && field(&input, "id")?.starts_with("read-")
     {
-        return read_operation(state, &input).await;
+        let mut value = read_operation(state, &input).await?;
+        if matches!(op, "get" | "wait") {
+            value["service_status"] = service_status(state, input["project"].as_str());
+        }
+        return Ok(value);
     }
     match field(&input, "op")? {
         "health" => Ok(
-            json!({"protocol":state.descriptor.protocol,"instance":state.descriptor.instance,"version":env!("CARGO_PKG_VERSION")}),
+            json!({"protocol":state.descriptor.protocol,"instance":state.descriptor.instance,"version":env!("CARGO_PKG_VERSION"),"build_id":research_core::BUILD_ID,
+                "service_status":service_status(state,input["project"].as_str())}),
         ),
         "submit" => {
             let submit: Submit = serde_json::from_value(input["request"].clone())?;
@@ -163,7 +219,8 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
                 }
             }
             Ok(json!({"request":job,"response_paging":response_paging,
-                    "remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":30,"local_transcript":local_transcript}))
+                    "remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":30,"local_transcript":local_transcript,
+                    "service_status":service_status(state,Some(&thread.project))}))
         }
         "response_content" => {
             let job = scoped_job(state, &input)?;
@@ -259,6 +316,11 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
             );
             if thread.state == "active" {
                 thread.state = "archive_pending".into();
+            }
+            if thread.state != "remote_deleted" {
+                // An explicit retirement request after fixing a blocker may retry
+                // immediately; ordinary background failures still retain backoff.
+                thread.cleanup_retry_at = 0;
                 store.save_thread(&thread)?;
             }
             state.notify.notify_one();
@@ -355,6 +417,93 @@ mod tests {
     use research_core::{PROTOCOL, ServiceDescriptor};
     use research_store::Store;
     use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn operation_health_surfaces_blocked_cleanup_and_ambiguous_work_without_cross_project_leaks()
+    -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut store = Store::open(&dir.path().join("db"))?;
+        let make = |project: &str, key: &str| Submit {
+            project: project.into(),
+            session: "synthetic".into(),
+            key: key.into(),
+            thread_id: None,
+            prompt: "synthetic".into(),
+            deep_research: false,
+        };
+        let job = store.submit(&make("a", "cleanup"), Config::default(), now())?;
+        store.cancel(&job.id, now())?;
+        let mut thread = store.thread(&job.thread_id)?;
+        thread.state = "deletion_pending".into();
+        thread.cleanup_error = Some("delete_unavailable".into());
+        thread.cleanup_attempts = 2;
+        thread.cleanup_retry_at = now() + 3600;
+        store.save_thread(&thread)?;
+        let other = store.submit(&make("b", "other"), Config::default(), now())?;
+        store.cancel(&other.id, now())?;
+        let mut other_thread = store.thread(&other.thread_id)?;
+        other_thread.state = "deletion_pending".into();
+        other_thread.cleanup_error = Some("other-project-error".into());
+        store.save_thread(&other_thread)?;
+        let mut ambiguous = store.submit(&make("a", "ambiguous"), Config::default(), now())?;
+        ambiguous.submitted_at = Some(now());
+        ambiguous.state = "submission_unknown".into();
+        store.save_progress(&mut ambiguous)?;
+        let mut failed = store.submit(&make("a", "creation-failed"), Config::default(), now())?;
+        store.finish(
+            &mut failed,
+            "failed",
+            Some("composer_not_ready".into()),
+            now(),
+        )?;
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        let state = State {
+            dir: dir.path().into(),
+            store: Arc::new(Mutex::new(store)),
+            descriptor: ServiceDescriptor {
+                protocol: PROTOCOL,
+                port: 0,
+                token: "synthetic".into(),
+                instance: "synthetic".into(),
+                pid: 0,
+            },
+            notify: Arc::new(tokio::sync::Notify::new()),
+            shutdown,
+        };
+        let status = service_status(&state, Some("a"));
+        assert_eq!(status["state"], "attention_required");
+        assert_eq!(status["cleanup"]["pending"], 1);
+        assert_eq!(status["cleanup"]["blocked"][0]["thread_id"], thread.id);
+        let requests = status["requests_needing_attention"].as_array().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .any(|issue| issue["request_id"] == ambiguous.id)
+        );
+        assert!(requests.iter().any(
+            |issue| issue["request_id"] == failed.id && issue["error"] == "composer_not_ready"
+        ));
+        assert!(!status.to_string().contains("other-project-error"));
+        let result = dispatch(&state, json!({"op":"get","project":"a","id":job.id})).await?;
+        assert_eq!(result["service_status"], status);
+        let retry = dispatch(&state, json!({"op":"retire","project":"a","id":thread.id})).await?;
+        assert_eq!(
+            state
+                .store
+                .lock()
+                .unwrap()
+                .thread(&thread.id)?
+                .cleanup_retry_at,
+            0
+        );
+        assert_eq!(retry["cleanup_error"], "delete_unavailable");
+        std::fs::write(dir.path().join("config.json"), "invalid config")?;
+        let health = dispatch(&state, json!({"op":"health"})).await?;
+        assert_eq!(health["protocol"], PROTOCOL);
+        assert_eq!(health["service_status"]["state"], "attention_required");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn local_api_auth_scope_idempotency_and_waiting() -> Result<()> {

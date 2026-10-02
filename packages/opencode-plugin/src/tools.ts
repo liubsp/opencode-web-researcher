@@ -1,10 +1,26 @@
 import type { Info } from "@opencode/plugin/promise/tool";
 import { assertResearchAgent, PERMISSION } from "./isolation.ts";
 
-type Call = (input: Record<string, unknown>) => Promise<unknown>;
+type Call = (input: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
 const text = { type: "string", minLength: 1, maxLength: 32000 };
 const id = { type: "string", minLength: 1, maxLength: 256 };
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
+
+async function wait(call: Call, body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+  const seconds = typeof body.seconds === "number" ? Math.min(3600, Math.max(1, body.seconds)) : 300;
+  const deadline = Date.now() + seconds * 1000;
+  let value: unknown;
+  do {
+    signal?.throwIfAborted();
+    const remaining = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+    // Keep each RPC within the existing server limit and transport timeout.
+    value = await call({ ...body, seconds: Math.min(60, remaining) }, signal);
+    const result = value as { request?: { state?: string }; state?: string } | null;
+    const state = result?.request?.state ?? result?.state;
+    if (!state || !["queued", "pacing", "preparing", "submitting", "waiting", "reading", "cancel_requested"].includes(state)) break;
+  } while (Date.now() < deadline);
+  return value;
+}
 
 export function tools(project: string, call: Call): Info[] {
   const definitions = [
@@ -12,8 +28,8 @@ export function tools(project: string, call: Call): Info[] {
       input: object({ prompt: text, request_key: id, deep_research: { type: "boolean", default: false } }, ["prompt", "request_key"]) },
     { name: "send", description: "Submit a useful follow-up in the same thread. Hard limit: ten prompts total. Reuse request_key for retries; a failed request is requeued with that key only when no submission occurred. Never send while a request is pending.",
       input: object({ thread_id: id, prompt: text, request_key: id }, ["thread_id", "prompt", "request_key"]) },
-    { name: "wait", description: "Wait patiently for an existing request. Repeat while pending, without resubmitting. Long saved responses are previews: if response_paging.next_offset is set, read the entire answer with research_response_content before following up or reporting it. Queue/composition time is additional to 1–10 minute Search; Deep Research can take longer.",
-      input: object({ id, seconds: { type: "integer", minimum: 1, maximum: 60, default: 60 } }, ["id"]) },
+    { name: "wait", description: "Wait patiently for an existing request, five minutes by default; choose a different interval when useful. Repeat while pending, without resubmitting. Long saved responses are previews: if response_paging.next_offset is set, read the entire answer with research_response_content before following up or reporting it. Queue/composition time is additional to 1–10 minute Search; Deep Research can take longer.",
+      input: object({ id, seconds: { type: "integer", minimum: 1, maximum: 3600, default: 300 } }, ["id"]) },
     { name: "get", description: "Read request state, response/budget or imported-chat metadata. For long managed responses, response_paging signals a preview; page the full saved text via research_response_content. Includes local_transcript.markdown.path: an absolute local file path, not a URL.", input: object({ id }, ["id"]) },
     { name: "response_content", description: "Page through a saved managed research response by request ID, without contacting ChatGPT. Start at offset 0 and follow next_offset until null; complete says whether the response finished. Read all pages before deciding follow-ups or reporting findings.",
       input: object({ id, offset: { type: "integer", minimum: 0, default: 0 }, limit: { type: "integer", minimum: 1, maximum: 32000, default: 12000 } }, ["id"]) },
@@ -26,7 +42,8 @@ export function tools(project: string, call: Call): Info[] {
     { name: "read_chats", description: "Read 1–10 user-specified ChatGPT conversation IDs or URLs, without sending prompts or deleting/modifying those chats. Returns a read request ID; use research_wait/get, then research_read_content for each result. Only accessible chats in the signed-in account can be read; capture covers the rendered current branch, not a guaranteed full export. Reuse request_key for retries.",
       input: object({ chats: { type: "array", items: { type: "string", minLength: 1, maxLength: 2048 }, minItems: 1, maxItems: 10 }, request_key: id }, ["chats", "request_key"]) },
     { name: "read_content", description: "Read a saved imported chat's Markdown in character-offset pages. Use the read request ID and zero-based chat_index from research_wait/get. Follow next_offset until null. Does not reopen Chrome or send prompts.",
-      input: object({ id, chat_index: { type: "integer", minimum: 0, maximum: 9 }, offset: { type: "integer", minimum: 0, default: 0 }, limit: { type: "integer", minimum: 1, maximum: 64000, default: 20000 } }, ["id", "chat_index"]) },
+       input: object({ id, chat_index: { type: "integer", minimum: 0, maximum: 9 }, offset: { type: "integer", minimum: 0, default: 0 }, limit: { type: "integer", minimum: 1, maximum: 64000, default: 20000 } }, ["id", "chat_index"]) },
+    { name: "health", description: "Check creation/recovery and overdue-cleanup health for this project. Report attention_required and blocked cleanup to the asking agent; a responsive daemon is not proof its browser operations succeeded.", input: object({}) },
   ];
   return definitions.map(definition => ({
     ...definition,
@@ -35,8 +52,12 @@ export function tools(project: string, call: Call): Info[] {
     options: { codemode: false, permission: PERMISSION },
     execute: async (raw, context) => {
       assertResearchAgent(context.agent);
+      // Native registration supplies the Fiber's signal, even with older Promise adapters.
+      const signal = (context as typeof context & { signal?: AbortSignal }).signal;
+      signal?.throwIfAborted();
       const input = raw as Record<string, unknown>;
       await context.progress({ status: definition.name === "wait" ? "Waiting for research" : "Contacting research service" });
+      signal?.throwIfAborted();
       const body = ["start", "send"].includes(definition.name)
         ? { op: "submit", request: { project, session: context.sessionID,
             key: `${context.sessionID}:${input.request_key}`, thread_id: input.thread_id ?? null,
@@ -44,7 +65,7 @@ export function tools(project: string, call: Call): Info[] {
         : definition.name === "read_chats"
           ? { ...input, op: "read_chats", project, session: context.sessionID, request_key: `${context.sessionID}:${input.request_key}` }
           : { ...input, op: definition.name, project };
-      const value = await call(body);
+      const value = definition.name === "wait" ? await wait(call, body, signal) : await call(body, signal);
       return { content: JSON.stringify(value), metadata: { research: true } };
     },
   }));
