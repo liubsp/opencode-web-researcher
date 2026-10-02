@@ -69,6 +69,9 @@ the conversation appeared under that project in the sidebar. The migrated login 
 - All 16 isolated Chrome fixtures pass, including multiline/zero-width text, mixed turn markup,
   literal whitespace, accessible Stop controls, scoped model selection, and applied mode checks.
   Persistence tests cover cancellation-preserving writes and single-use draft-cleanup receipts.
+- Browser tests cover delayed tab-close acknowledgements and a target disappearing during window
+  lookup. Closure waits for the exact target to leave the list; minimization still rejects lookup
+  failures for existing targets and unrelated CDP errors. Tab closure is not chat-deletion evidence.
 - Existing real research and its follow-up completed through OpenCode tools with full response
   pagination. After deployment, the original saved answer remained retrievable in two pages;
   recovery and verification did not resend submitted prompts or revive the cancelled smoke test.

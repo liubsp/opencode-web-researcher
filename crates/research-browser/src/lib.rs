@@ -458,12 +458,27 @@ impl Chrome {
             .into_iter()
             .filter(|t| t["type"] == "page")
         {
-            let window = browser
+            let window = match browser
                 .command(
                     "Browser.getWindowForTarget",
                     json!({"targetId":target["id"]}),
                 )
-                .await?;
+                .await
+            {
+                Ok(window) => window,
+                Err(error)
+                    if error.to_string().contains("No target with given id")
+                        && !self
+                            .targets()
+                            .await?
+                            .iter()
+                            .any(|current| current["id"] == target["id"]) =>
+                {
+                    // A tab can finish closing between enumeration and its window lookup.
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if let Some(id) = window["windowId"].as_i64()
                 && windows.insert(id)
                 && window["bounds"]["windowState"] != "minimized"
@@ -553,9 +568,10 @@ impl Chrome {
             std::fs::write(path, research_core::now().to_string())?;
         }
         ensure!(
-            target
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+            !target.is_empty()
+                && target
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-'),
             "Invalid target ID"
         );
         self.http
@@ -566,7 +582,24 @@ impl Chrome {
             .send()
             .await?
             .error_for_status()?;
-        Ok(())
+        // The close endpoint acknowledges intent before macOS removes the target from /json/list.
+        // Confirm tab closure before reusing the browser; this is not evidence of chat deletion.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for _ in 0..40 {
+                if !self
+                    .targets()
+                    .await?
+                    .iter()
+                    .any(|entry| entry["id"] == target)
+                {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            bail!("Chrome tab did not finish closing")
+        })
+        .await
+        .context("Chrome tab close timed out")?
     }
 }
 
@@ -639,6 +672,110 @@ pub fn same_conversation_url(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn scripted_http(
+        replies: Vec<(&'static str, Value)>,
+    ) -> Result<(u16, tokio::task::JoinHandle<()>)> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let task = tokio::spawn(async move {
+            for (path, body) in replies {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                let mut buffer = [0; 4096];
+                while !headers.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    assert!(count > 0 && headers.len() < 16384);
+                    headers.extend_from_slice(&buffer[..count]);
+                }
+                assert!(headers.starts_with(format!("GET {path} ").as_bytes()));
+                let body = body.to_string();
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        Ok((port, task))
+    }
+
+    #[tokio::test]
+    async fn tab_close_waits_for_the_exact_target_to_disappear() -> Result<()> {
+        let (port, server) = scripted_http(vec![
+            ("/json/close/one", json!("Target is closing")),
+            ("/json/list", json!([{"id":"one"},{"id":"unrelated"}])),
+            ("/json/list", json!([{"id":"unrelated"}])),
+        ])
+        .await?;
+        let chrome = Chrome {
+            port,
+            http: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()?,
+            websocket: String::new(),
+            activity: None,
+        };
+        chrome.close("one").await?;
+        assert!(chrome.close("").await.is_err());
+        tokio::time::timeout(Duration::from_secs(2), server).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn minimize_tolerates_only_confirmed_disappearing_targets() -> Result<()> {
+        for (disappeared, message) in [
+            (true, "No target with given id"),
+            (false, "No target with given id"),
+            (true, "Window access denied"),
+        ] {
+            let mut replies = vec![("/json/list", json!([{"id":"one","type":"page"}]))];
+            if message == "No target with given id" {
+                replies.push((
+                    "/json/list",
+                    if disappeared {
+                        json!([])
+                    } else {
+                        json!([{"id":"one","type":"page"}])
+                    },
+                ));
+            }
+            let (port, http_server) = scripted_http(replies).await?;
+            let websocket = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let ws_port = websocket.local_addr()?.port();
+            let ws_server = tokio::spawn(async move {
+                let (stream, _) = websocket.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let request: Value =
+                    serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(request["method"], "Browser.getWindowForTarget");
+                assert_eq!(request["params"]["targetId"], "one");
+                socket
+                    .send(Message::Text(
+                        json!({"id":request["id"],"error":{"code":-32000,"message":message}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            });
+            let chrome = Chrome {
+                port,
+                http: reqwest::Client::builder()
+                    .no_proxy()
+                    .timeout(Duration::from_secs(2))
+                    .build()?,
+                websocket: format!("ws://127.0.0.1:{ws_port}/test"),
+                activity: None,
+            };
+            assert_eq!(
+                chrome.minimize().await.is_ok(),
+                disappeared && message == "No target with given id"
+            );
+            http_server.await?;
+            ws_server.await?;
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn ui_deletion_acknowledgements_are_observed_through_real_cdp_correlation() -> Result<()>
