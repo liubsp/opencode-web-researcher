@@ -10,6 +10,7 @@ let result;
 try {
   result = spawnSync("cargo", ["test", "-p", "research-chatgpt", "--test", "browser_fixture", "--locked", "--", "--ignored", "--test-threads=1"], {
     stdio: "inherit", env: { ...process.env, WEB_RESEARCH_FIXTURE_HOME: home },
+    timeout: 180_000, killSignal: "SIGKILL",
   });
   if (result.error) throw result.error;
 } finally {

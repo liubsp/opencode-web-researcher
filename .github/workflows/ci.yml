@@ -4,8 +4,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -29,8 +34,10 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --locked
       - run: node scripts/check-browser.mjs
+        timeout-minutes: 5
       - run: node scripts/build-release.mjs
       - run: node scripts/check-runtime.mjs
+        timeout-minutes: 5
       - run: npm pack --workspace opencode-web-researcher
       - uses: actions/upload-artifact@v4
         with:
