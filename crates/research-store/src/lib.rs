@@ -143,6 +143,7 @@ impl Store {
                 cleanup_error: None,
                 cleanup_attempts: 0,
                 cleanup_retry_at: 0,
+                cleanup_inaccessible_attempts: Some(0),
                 deletion_receipt: None,
             }
         };

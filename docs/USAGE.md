@@ -73,6 +73,11 @@ opencode-web-researcher shutdown
 - **Cleanup blocked:** `status` reports the backlog, last error, attempts, and retry deadline.
   `research_health` and ordinary `research_get`/`research_wait` results expose this project's
   operation status. An inaccessible conversation stays unconfirmed; it is not counted as deleted.
+  Three consecutive inaccessible results, separated by normal backoff (initially one and two
+  minutes), stop automatic cleanup in `deletion_inaccessible`. Health lists these under
+  `cleanup.manual_review`, separately from retryable `cleanup.pending`. Archives remain retained;
+  the service won't reopen Chrome for these records. An explicit `retire` operation starts another
+  bounded retry series after access is restored. Existing exhausted retries stop on upgrade.
 
 `browser-check` exercises a blank tab and checks minimized state and `navigator.webdriver`.
 `browser-inspect` reports readiness and control labels, not transcripts. Don't navigate or manually

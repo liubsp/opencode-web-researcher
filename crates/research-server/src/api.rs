@@ -74,6 +74,7 @@ fn service_status(state: &State, project: Option<&str>) -> Value {
             .lock()
             .map_err(|_| anyhow::anyhow!("Store lock poisoned"))?;
         let mut pending = 0;
+        let mut manual_review = 0;
         let mut confirmed_deleted = 0;
         let mut cleanup_issues = Vec::new();
         let mut request_issues = Vec::new();
@@ -98,18 +99,25 @@ fn service_status(state: &State, project: Option<&str>) -> Value {
                 || thread.prompts >= 10
                 || now() >= thread.inactivity_deadline(&config);
             if due && jobs.iter().all(research_core::Job::terminal) {
-                pending += 1;
+                let automatic_retry = thread.state != "deletion_inaccessible";
+                if automatic_retry {
+                    pending += 1;
+                } else {
+                    manual_review += 1;
+                }
                 if let Some(error) = &thread.cleanup_error {
                     cleanup_issues.push(
                         json!({"thread_id":thread.id,"state":thread.state,"error":error,
-                        "attempts":thread.cleanup_attempts,"retry_at":thread.cleanup_retry_at}),
+                        "attempts":thread.cleanup_attempts,"retry_at":thread.cleanup_retry_at,
+                        "inaccessible_attempts":thread.cleanup_inaccessible_attempts,
+                        "automatic_retry":automatic_retry}),
                     );
                 }
             }
         }
         Ok(
             json!({"state":if cleanup_issues.is_empty() && request_issues.is_empty() {"ready"} else {"attention_required"},
-            "cleanup":{"pending":pending,"confirmed_chat_deletions":confirmed_deleted,"blocked":cleanup_issues},
+            "cleanup":{"pending":pending,"manual_review":manual_review,"confirmed_chat_deletions":confirmed_deleted,"blocked":cleanup_issues},
             "requests_needing_attention":request_issues}),
         )
     };
@@ -320,6 +328,10 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
             if thread.state != "remote_deleted" {
                 // An explicit retirement request after fixing a blocker may retry
                 // immediately; ordinary background failures still retain backoff.
+                if thread.state == "deletion_inaccessible" {
+                    thread.state = "deletion_pending".into();
+                }
+                thread.cleanup_inaccessible_attempts = Some(0);
                 thread.cleanup_retry_at = 0;
                 store.save_thread(&thread)?;
             }
@@ -498,6 +510,37 @@ mod tests {
             0
         );
         assert_eq!(retry["cleanup_error"], "delete_unavailable");
+        thread.state = "deletion_inaccessible".into();
+        thread.cleanup_error = Some("deletion_access_unavailable: synthetic".into());
+        thread.cleanup_attempts = 40;
+        thread.cleanup_inaccessible_attempts = Some(40);
+        thread.cleanup_retry_at = 0;
+        state.store.lock().unwrap().save_thread(&thread)?;
+        let status = service_status(&state, Some("a"));
+        assert_eq!(status["state"], "attention_required");
+        assert_eq!(status["cleanup"]["pending"], 0);
+        assert_eq!(status["cleanup"]["manual_review"], 1);
+        assert_eq!(status["cleanup"]["confirmed_chat_deletions"], 0);
+        assert_eq!(status["cleanup"]["blocked"][0]["automatic_retry"], false);
+        assert!(
+            dispatch(&state, json!({"op":"retire","project":"b","id":thread.id}))
+                .await
+                .is_err()
+        );
+        let retry = dispatch(&state, json!({"op":"retire","project":"a","id":thread.id})).await?;
+        assert_eq!(retry["state"], "deletion_pending");
+        assert_eq!(retry["cleanup_retry_at"].as_i64().unwrap_or(0), 0);
+        assert_eq!(retry["cleanup_inaccessible_attempts"], 0);
+        assert_eq!(retry["cleanup_attempts"], 40);
+        assert_eq!(
+            retry["cleanup_error"],
+            "deletion_access_unavailable: synthetic"
+        );
+        assert!(retry.get("deletion_receipt").is_none());
+        assert_eq!(
+            service_status(&state, Some("a"))["cleanup"]["manual_review"],
+            0
+        );
         std::fs::write(dir.path().join("config.json"), "invalid config")?;
         let health = dispatch(&state, json!({"op":"health"})).await?;
         assert_eq!(health["protocol"], PROTOCOL);

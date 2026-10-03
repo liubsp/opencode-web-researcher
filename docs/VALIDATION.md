@@ -115,13 +115,27 @@ the conversation appeared under that project in the sidebar. The migrated login 
   first UI deletion's successful acknowledgement; its diagnostic record was reconciled from that
   evidence after a backup. The final installed retest retired automatically with a durable UI-response
   receipt after recovering from a transient menu-readiness failure. No original research was resent.
-- Previously visible overdue chats are absent from the project. Three historical records remain
+- Previously visible overdue chats are absent from the project. Historical records remain
   explicitly unconfirmed because reopening them now yields access denial and no deletion receipt was
   captured at the time. Their local archives are retained; disappearance is not retroactive proof.
 - Final installed server and loaded plugin identities were verified through the existing OpenCode
   service without restarting OpenCode or agents. All original saved requests and nine within-retention
   thread records were unchanged; the project retained its seven originally visible retained chats,
-  with no overdue or untracked rows. Operation health exposes the three unresolved cleanup records.
+  with no overdue or untracked rows. Operation health exposes unresolved cleanup records.
+
+### Bounded inaccessible cleanup
+
+- Regression tests cover three spaced inaccessible results, reset after other errors, explicit
+  scoped retries, durable stopping across restarts, legacy backlog adoption without Chrome,
+  archive/request preservation, and precedence of existing deletion receipts.
+- The real CLI lifecycle test seeds an exhausted legacy record with a future retry deadline.
+  Startup moves it to `deletion_inaccessible`; another restart preserves that state and archive
+  bytes without launching Chrome or submitting a prompt.
+- Installed activation stopped all five exhausted inaccessible records with zero further browser
+  activity. All saved requests, retained thread records, imports, transcripts, and archive bytes
+  were unchanged. CLI status reports five manual-review failures and zero automatic cleanup pending;
+  the loaded read-only OpenCode health tool uses the new server and still rejects other agents.
+  Neither OpenCode nor agents were restarted. Inaccessibility remains unconfirmed, not deleted.
 
 ## In progress
 
@@ -142,4 +156,4 @@ generation stopped and is not eligible for deletion. Only terminal work may be a
 
 Expired chats and capped chats are archived locally before remote deletion; cleanup retries must
 verify existing archive bytes. Missing or changed UI controls leave deletion pending instead of
-guessing at another conversation.
+guessing at another conversation; repeated access denial stops automatic cleanup as inaccessible.

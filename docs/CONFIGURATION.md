@@ -132,6 +132,11 @@ If saving fails, deletion is blocked. Cleanup retires at most one chat per pass,
 also retry after 1, 2, 4, 8, 16, 32, then 60 minutes, with an hourly cap. Per-chat retry schedules
 survive restarts; successful cleanup resets the counter. Retries verify saved transcripts and
 consume no prompts.
+Three consecutive `deletion_access_unavailable` results stop automatic retries in
+`deletion_inaccessible`, including already-exhausted records on upgrade. This is an unconfirmed
+permanent cleanup failure, not evidence that the chat was deleted. Local history remains retained;
+health reports manual review separately from retryable cleanup. Only an explicit `retire` operation
+reopens a bounded retry series. Other errors retain the ordinary backoff.
 
 ### Accessing transcript files
 

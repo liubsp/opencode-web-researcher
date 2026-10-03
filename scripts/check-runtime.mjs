@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, copyFile, readFile, writeFile, rm, realpath } from "nod
 import { tmpdir } from "node:os";
 import { resolve, join, basename } from "node:path";
 import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 
 const exec = promisify(execFile);
 const binary = resolve("target/release", process.platform === "win32" ? "opencode-web-researcher.exe" : "opencode-web-researcher");
@@ -51,7 +52,7 @@ let previous;
 try {
   await mkdir(join(home, "application"));
   await copyFile(binary, preferred);
-  await writeFile(join(home, "config.json"), JSON.stringify({ words_per_minute: 1, fixed_pause_seconds: 3600, pause_jitter_seconds: 0, chrome_auto_close: false }));
+  await writeFile(join(home, "config.json"), JSON.stringify({ words_per_minute: 1, fixed_pause_seconds: 3600, pause_jitter_seconds: 0, chrome_auto_close: false, chrome_path: join(home, "nonexistent-browser") }));
   running = JSON.parse((await cli(binary, "connect")).stdout);
   const request = { project: "synthetic", session: "synthetic", key: "runtime-test", prompt: "Synthetic work - must never reach ChatGPT", deep_research: false };
   const job = await rpc(running, { op: "submit", request });
@@ -85,6 +86,17 @@ try {
   await waitForStop(running);
   running = undefined;
   // The fallback launcher must start the preferred executable after shutdown.
+  // Seed an exhausted legacy cleanup while stopped; it must not wake Chrome, even
+  // with a future retry deadline, and must preserve the cancelled request/archive.
+  const database = new DatabaseSync(join(home, "state.sqlite"));
+  try {
+    const thread = JSON.parse(database.prepare("SELECT data FROM threads WHERE id=?").get(job.thread_id).data);
+    Object.assign(thread, { state: "deletion_pending", url: "https://chatgpt.com/c/00000000-0000-4000-8000-000000000001",
+      cleanup_error: "deletion_access_unavailable: synthetic inaccessible conversation", cleanup_attempts: 40,
+      cleanup_retry_at: Math.floor(Date.now() / 1000) + 3600 });
+    delete thread.cleanup_inaccessible_attempts;
+    database.prepare("UPDATE threads SET data=? WHERE id=?").run(JSON.stringify(thread), thread.id);
+  } finally { database.close(); }
   running = JSON.parse((await cli(binary, "connect")).stdout);
   const image = process.platform === "win32"
     ? (await exec("powershell.exe", ["-NoProfile", "-Command", `(Get-Process -Id ${running.pid} -ErrorAction Stop).Path`], { windowsHide: true })).stdout.trim()
@@ -92,8 +104,30 @@ try {
   assert.equal((await realpath(image)).toLowerCase(), (await realpath(preferred)).toLowerCase(), "Fallback launcher started the wrong executable");
   assert.equal((await rpc(running, { op: "health" })).build_id, health.build_id);
   assert.equal((await rpc(running, { op: "get", id: job.id, project: request.project })).request.state, "cancelled");
+  const deadline = Date.now() + 10_000;
+  let cleanup;
+  do {
+    cleanup = (await rpc(running, { op: "health", project: request.project })).service_status.cleanup;
+    if (cleanup.manual_review === 1) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
+  assert.equal(cleanup.manual_review, 1, "Exhausted cleanup did not stop on upgrade");
+  assert.equal(cleanup.pending, 0);
+  assert.equal(cleanup.confirmed_chat_deletions, 0);
+  assert.equal(cleanup.blocked[0].state, "deletion_inaccessible");
+  assert.equal(cleanup.blocked[0].attempts, 40);
+  assert.equal(cleanup.blocked[0].inaccessible_attempts, 40);
+  assert.equal(cleanup.blocked[0].automatic_retry, false);
+  const archive = await readFile(join(home, "archives", job.thread_id, "thread.md"), "utf8");
+  assert.ok(archive.includes(request.prompt));
+  await rpc(running, { op: "shutdown" });
+  await waitForStop(running);
+  running = JSON.parse((await cli(binary, "connect")).stdout);
+  assert.deepEqual((await rpc(running, { op: "health", project: request.project })).service_status.cleanup, cleanup);
+  assert.equal(await readFile(join(home, "archives", job.thread_id, "thread.md"), "utf8"), archive);
+  assert.equal((await rpc(running, { op: "get", id: job.id, project: request.project })).request.state, "cancelled");
   await assert.rejects(readFile(join(home, "chrome.json")), { code: "ENOENT" });
-  console.log("Runtime lifecycle passed: activation, idempotency, retained unsent request, preferred bootstrap; no Chrome/account submission");
+  console.log("Runtime lifecycle passed: activation, idempotency, retained unsent request, preferred bootstrap, durable inaccessible cleanup stop; no Chrome/account submission");
 } finally {
   previous?.close();
   if (!running) { try { running = await descriptor(); } catch {} }

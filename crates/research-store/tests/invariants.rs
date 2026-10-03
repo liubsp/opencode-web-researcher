@@ -347,6 +347,14 @@ fn retention_requires_age_and_confirmed_remote_cleanup() -> Result<()> {
     thread.state = "deletion_pending".into();
     store.save_thread(&thread)?;
     assert_eq!(store.purge_expired_transcripts(dir.path(), 11)?, 0);
+    thread.state = "deletion_inaccessible".into();
+    thread.cleanup_inaccessible_attempts = Some(3);
+    store.save_thread(&thread)?;
+    assert_eq!(store.purge_expired_transcripts(dir.path(), 11)?, 0);
+    assert_eq!(
+        store.thread(&thread.id)?.cleanup_inaccessible_attempts,
+        Some(3)
+    );
     thread.state = "remote_deleted".into();
     store.save_thread(&thread)?;
     assert_eq!(store.purge_expired_transcripts(dir.path(), 10)?, 0);

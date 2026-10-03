@@ -230,6 +230,9 @@ pub struct Thread {
     pub cleanup_attempts: u32,
     #[serde(default, skip_serializing_if = "zero_i64")]
     pub cleanup_retry_at: i64,
+    /// None identifies older records whose last error and spaced attempt count can be reused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_inaccessible_attempts: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletion_receipt: Option<DeletionReceipt>,
 }

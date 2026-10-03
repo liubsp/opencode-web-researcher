@@ -442,13 +442,21 @@ async fn cleanup(state: &State) -> Result<()> {
     let config = Config::load(&state.dir)?;
     let threads = state.store.lock().unwrap().threads(None)?;
     for mut thread in threads {
-        if thread.state == "remote_deleted" || thread.cleanup_retry_at > now() {
+        if thread.state == "remote_deleted"
+            || thread.state == "deletion_inaccessible" && thread.deletion_receipt.is_none()
+        {
             continue;
         }
         if thread.state == "active"
             && thread.prompts < 10
             && now() < thread.inactivity_deadline(&config)
         {
+            continue;
+        }
+        // Adopt already-exhausted legacy retries without waking Chrome, even if their
+        // next retry is in the future. Never replace an existing deletion receipt.
+        let inaccessible = inaccessible_cleanup_exhausted(&thread);
+        if !inaccessible && thread.cleanup_retry_at > now() {
             continue;
         }
         {
@@ -460,8 +468,12 @@ async fn cleanup(state: &State) -> Result<()> {
             thread.state = "archive_pending".into();
             store.save_thread(&thread)?;
             if let Err(error) = store.archive(&thread, &state.dir) {
-                thread.cleanup_error = Some(error.to_string());
-                schedule_cleanup_retry(&mut thread);
+                schedule_cleanup_retry(&mut thread, error.to_string());
+                store.save_thread(&thread)?;
+                continue;
+            }
+            if inaccessible {
+                stop_inaccessible_cleanup(&mut thread);
                 store.save_thread(&thread)?;
                 continue;
             }
@@ -475,10 +487,10 @@ async fn cleanup(state: &State) -> Result<()> {
                 thread.cleanup_error = None;
                 thread.cleanup_attempts = 0;
                 thread.cleanup_retry_at = 0;
+                thread.cleanup_inaccessible_attempts = Some(0);
             }
             Err(error) => {
-                thread.cleanup_error = Some(error.to_string());
-                schedule_cleanup_retry(&mut thread);
+                schedule_cleanup_retry(&mut thread, error.to_string());
             }
         }
         state.store.lock().unwrap().save_thread(&thread)?;
@@ -494,9 +506,51 @@ fn cleanup_delay(attempts: u32) -> i64 {
     (60_i64 * (1_i64 << attempts.saturating_sub(1).min(10))).min(3600)
 }
 
-fn schedule_cleanup_retry(thread: &mut Thread) {
+fn schedule_cleanup_retry(thread: &mut Thread, error: String) {
+    let inaccessible = inaccessible_cleanup_attempts(thread);
+    thread.cleanup_error = Some(error);
     thread.cleanup_attempts = thread.cleanup_attempts.saturating_add(1);
+    thread.cleanup_inaccessible_attempts = Some(if inaccessible_cleanup_error(thread) {
+        inaccessible.saturating_add(1)
+    } else {
+        0
+    });
+    if inaccessible_cleanup_exhausted(thread) {
+        stop_inaccessible_cleanup(thread);
+        return;
+    }
     thread.cleanup_retry_at = now() + cleanup_delay(thread.cleanup_attempts);
+}
+
+const INACCESSIBLE_CLEANUP_LIMIT: u32 = 3;
+
+fn inaccessible_cleanup_error(thread: &Thread) -> bool {
+    thread
+        .cleanup_error
+        .as_deref()
+        .is_some_and(|error| error.starts_with("deletion_access_unavailable:"))
+}
+
+fn inaccessible_cleanup_attempts(thread: &Thread) -> u32 {
+    thread.cleanup_inaccessible_attempts.unwrap_or_else(|| {
+        if inaccessible_cleanup_error(thread) {
+            thread.cleanup_attempts
+        } else {
+            0
+        }
+    })
+}
+
+fn inaccessible_cleanup_exhausted(thread: &Thread) -> bool {
+    thread.deletion_receipt.is_none()
+        && inaccessible_cleanup_error(thread)
+        && inaccessible_cleanup_attempts(thread) >= INACCESSIBLE_CLEANUP_LIMIT
+}
+
+fn stop_inaccessible_cleanup(thread: &mut Thread) {
+    thread.cleanup_inaccessible_attempts = Some(inaccessible_cleanup_attempts(thread));
+    thread.state = "deletion_inaccessible".into();
+    thread.cleanup_retry_at = 0;
 }
 
 fn reusable_cleanup_location(current: &str, expected: &str) -> bool {
@@ -629,6 +683,198 @@ mod tests {
     }
     use research_core::Submit;
     use research_store::Store;
+
+    fn cleanup_test_state() -> Result<(tempfile::TempDir, State)> {
+        let dir = tempfile::tempdir()?;
+        let config = Config {
+            chrome_path: Some(dir.path().join("nonexistent-browser")),
+            ..Config::default()
+        };
+        std::fs::write(dir.path().join("config.json"), serde_json::to_vec(&config)?)?;
+        let store = Store::open(&dir.path().join("state.sqlite"))?;
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        let state = State {
+            dir: dir.path().into(),
+            store: std::sync::Arc::new(std::sync::Mutex::new(store)),
+            descriptor: research_core::ServiceDescriptor {
+                protocol: research_core::PROTOCOL,
+                port: 0,
+                token: "synthetic".into(),
+                instance: "synthetic".into(),
+                pid: 0,
+            },
+            notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            shutdown,
+        };
+        Ok((dir, state))
+    }
+
+    fn cleanup_test_thread(state: &State, key: &str) -> Result<Thread> {
+        let mut store = state.store.lock().unwrap();
+        let job = store.submit(
+            &Submit {
+                project: "synthetic".into(),
+                session: "synthetic".into(),
+                key: key.into(),
+                thread_id: None,
+                prompt: "synthetic".into(),
+                deep_research: false,
+            },
+            Config::default(),
+            now(),
+        )?;
+        store.cancel(&job.id, now())?;
+        let mut thread = store.thread(&job.thread_id)?;
+        thread.state = "deletion_pending".into();
+        thread.url = Some(format!("https://chatgpt.com/c/{key}"));
+        Ok(thread)
+    }
+
+    const INACCESSIBLE_ERROR: &str = "deletion_access_unavailable: owned conversation is inaccessible; deletion is not confirmed";
+
+    #[tokio::test]
+    async fn inaccessible_cleanup_is_spaced_bounded_and_stays_stopped_after_restart() -> Result<()>
+    {
+        let (dir, state) = cleanup_test_state()?;
+        let mut thread = cleanup_test_thread(&state, "inaccessible")?;
+        for (attempt, delay) in [(1, 60), (2, 120)] {
+            schedule_cleanup_retry(&mut thread, INACCESSIBLE_ERROR.into());
+            assert_eq!(thread.cleanup_inaccessible_attempts, Some(attempt));
+            assert!(thread.cleanup_retry_at >= now() + delay - 1);
+            state.store.lock().unwrap().save_thread(&thread)?;
+            cleanup(&state).await?; // A future deadline must not touch Chrome or retry.
+            let saved = state.store.lock().unwrap().thread(&thread.id)?;
+            assert_eq!(saved.cleanup_attempts, attempt);
+            assert_eq!(saved.cleanup_retry_at, thread.cleanup_retry_at);
+        }
+        schedule_cleanup_retry(&mut thread, INACCESSIBLE_ERROR.into());
+        assert_eq!(thread.state, "deletion_inaccessible");
+        assert_eq!(thread.cleanup_inaccessible_attempts, Some(3));
+        assert_eq!(thread.cleanup_retry_at, 0);
+        assert!(thread.deletion_receipt.is_none());
+        state.store.lock().unwrap().archive(&thread, dir.path())?;
+        state.store.lock().unwrap().save_thread(&thread)?;
+        let before = serde_json::to_value(&thread)?;
+        *state.store.lock().unwrap() = Store::open(&dir.path().join("state.sqlite"))?;
+        for _ in 0..3 {
+            cleanup(&state).await?;
+        }
+        assert_eq!(
+            serde_json::to_value(state.store.lock().unwrap().thread(&thread.id)?)?,
+            before
+        );
+        assert!(!dir.path().join("chrome.json").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn inaccessible_streak_resets_for_other_errors_and_legacy_counts_are_seeded_before_failure()
+    -> Result<()> {
+        let (_dir, state) = cleanup_test_state()?;
+        let mut thread = cleanup_test_thread(&state, "streak")?;
+        for _ in 0..2 {
+            schedule_cleanup_retry(&mut thread, INACCESSIBLE_ERROR.into());
+        }
+        schedule_cleanup_retry(&mut thread, "delete_menu_unavailable".into());
+        assert_eq!(thread.cleanup_inaccessible_attempts, Some(0));
+        schedule_cleanup_retry(&mut thread, INACCESSIBLE_ERROR.into());
+        assert_eq!(thread.cleanup_inaccessible_attempts, Some(1));
+        assert_eq!(thread.state, "deletion_pending");
+        thread.cleanup_inaccessible_attempts = None;
+        thread.cleanup_attempts = 40;
+        thread.cleanup_error = Some("browser_connection_failed".into());
+        schedule_cleanup_retry(&mut thread, INACCESSIBLE_ERROR.into());
+        assert_eq!(thread.cleanup_inaccessible_attempts, Some(1));
+        assert_eq!(thread.state, "deletion_pending");
+        thread.cleanup_inaccessible_attempts = None;
+        thread.cleanup_attempts = 2;
+        schedule_cleanup_retry(&mut thread, INACCESSIBLE_ERROR.into());
+        assert_eq!(thread.cleanup_inaccessible_attempts, Some(3));
+        assert_eq!(thread.state, "deletion_inaccessible");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exhausted_legacy_cleanup_stops_entire_backlog_without_browser_or_archive_changes()
+    -> Result<()> {
+        let (dir, state) = cleanup_test_state()?;
+        let mut snapshots = Vec::new();
+        for index in 0..5 {
+            let mut thread = cleanup_test_thread(&state, &format!("legacy-{index}"))?;
+            thread.cleanup_error = Some(INACCESSIBLE_ERROR.into());
+            thread.cleanup_attempts = 14 + index;
+            thread.cleanup_retry_at = now() + 3600;
+            thread.cleanup_inaccessible_attempts = None;
+            let store = state.store.lock().unwrap();
+            store.save_thread(&thread)?;
+            store.archive(&thread, dir.path())?;
+            let archive = dir
+                .path()
+                .join("archives")
+                .join(&thread.id)
+                .join("thread.md");
+            let jobs = serde_json::to_value(store.jobs(&thread.id)?)?;
+            snapshots.push((thread, std::fs::read(&archive)?, jobs));
+        }
+        // Keep an unexpired chat completely unchanged, even with a historical error.
+        let mut retained = cleanup_test_thread(&state, "retained")?;
+        retained.state = "active".into();
+        state.store.lock().unwrap().save_thread(&retained)?;
+        cleanup(&state).await?;
+        for (before, archive, jobs) in snapshots {
+            let saved = state.store.lock().unwrap().thread(&before.id)?;
+            assert_eq!(saved.state, "deletion_inaccessible");
+            assert_eq!(saved.cleanup_retry_at, 0);
+            assert_eq!(saved.cleanup_attempts, before.cleanup_attempts);
+            assert_eq!(
+                saved.cleanup_inaccessible_attempts,
+                Some(before.cleanup_attempts)
+            );
+            assert_eq!(saved.cleanup_error, before.cleanup_error);
+            assert!(saved.deletion_receipt.is_none());
+            assert_eq!(
+                serde_json::to_value(state.store.lock().unwrap().jobs(&saved.id)?)?,
+                jobs
+            );
+            assert_eq!(
+                std::fs::read(
+                    dir.path()
+                        .join("archives")
+                        .join(&saved.id)
+                        .join("thread.md")
+                )?,
+                archive
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(state.store.lock().unwrap().thread(&retained.id)?)?,
+            serde_json::to_value(retained)?
+        );
+        assert!(!dir.path().join("chrome.json").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exhausted_access_errors_do_not_override_durable_deletion_receipts() -> Result<()> {
+        let (dir, state) = cleanup_test_state()?;
+        let mut thread = cleanup_test_thread(&state, "receipt")?;
+        thread.cleanup_error = Some(INACCESSIBLE_ERROR.into());
+        thread.cleanup_attempts = 40;
+        thread.cleanup_inaccessible_attempts = None;
+        thread.deletion_receipt = Some(research_core::DeletionReceipt {
+            url: thread.url.clone().unwrap(),
+            confirmed_at: now(),
+            evidence: "ui_response".into(),
+        });
+        state.store.lock().unwrap().save_thread(&thread)?;
+        cleanup(&state).await?;
+        let saved = state.store.lock().unwrap().thread(&thread.id)?;
+        assert_eq!(saved.state, "remote_deleted");
+        assert!(saved.deletion_receipt.is_some());
+        assert_eq!(saved.cleanup_inaccessible_attempts, Some(0));
+        assert!(!dir.path().join("chrome.json").exists());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn retirement_recovers_durable_receipts_without_browser_or_redeletion() -> Result<()> {
