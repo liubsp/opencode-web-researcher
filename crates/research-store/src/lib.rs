@@ -338,7 +338,7 @@ impl Store {
     }
 
     pub fn generation_in_progress(&self) -> Result<bool> {
-        Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE state IN ('submitting','waiting','timed_out','cancel_requested'))", [], |row| row.get(0))?)
+        Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE state IN ('submitting','waiting','timed_out','cancel_requested','submission_unknown','needs_attention'))", [], |row| row.get(0))?)
     }
 
     /// Atomically occupy the single research slot before starting its full global pacing delay.

@@ -46,15 +46,21 @@ fn only_one_global_slot_and_new_threads_wait_the_entire_delay() -> Result<()> {
         active.state = state.into();
         active.submitted_at = Some(38);
         store.save_job(&active)?;
+        assert!(other.generation_in_progress()?);
         assert_eq!(other.claim_next_job(1000)?.unwrap().id, first.id);
     }
     active.state = "submission_unknown".into();
     store.save_job(&active)?;
+    assert!(other.generation_in_progress()?);
     assert!(other.claim_next_job(1000)?.is_none());
     assert_eq!(other.job(&second.id)?.state, "queued");
+    active.state = "needs_attention".into();
+    store.save_job(&active)?;
+    assert!(other.generation_in_progress()?);
     active.state = "waiting".into();
     store.save_job(&active)?;
     store.finish(&mut active, "completed", None, 1000)?;
+    assert!(!other.generation_in_progress()?);
     drop(store);
     drop(other);
     let mut restarted = Store::open(&db)?;
