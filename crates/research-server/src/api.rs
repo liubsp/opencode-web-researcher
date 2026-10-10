@@ -37,6 +37,25 @@ async fn handle(
         )
             .into_response();
     }
+    let operation = match input["op"].as_str().unwrap_or_default() {
+        "health" => "health",
+        "get" => "get",
+        "wait" => "wait",
+        "submit" => "submit",
+        "read_chats" => "read_chats",
+        "cancel" => "cancel",
+        "retire" => "retire",
+        "reconcile" => "reconcile",
+        "list" => "list",
+        "archive" => "archive",
+        "resume" => "resume",
+        "response_content" => "response_content",
+        "read_content" => "read_content",
+        "shutdown" => "shutdown",
+        _ => "other",
+    };
+    research_browser::pacing::Pacer::new(&state.dir)
+        .log("rpc", json!({"operation":operation,"loads_page":false}));
     match dispatch(&state, input).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => (
@@ -69,6 +88,12 @@ fn scoped_job(state: &State, input: &Value) -> Result<research_core::Job> {
 fn service_status(state: &State, project: Option<&str>) -> Value {
     let inspect = || -> Result<Value> {
         let config = Config::load(&state.dir)?;
+        let mut browser =
+            serde_json::to_value(research_browser::pacing::Pacer::new(&state.dir).status()?)?;
+        browser
+            .as_object_mut()
+            .unwrap()
+            .remove("observer_ready_targets");
         let store = state
             .store
             .lock()
@@ -118,11 +143,39 @@ fn service_status(state: &State, project: Option<&str>) -> Value {
         Ok(
             json!({"state":if cleanup_issues.is_empty() && request_issues.is_empty() {"ready"} else {"attention_required"},
             "cleanup":{"pending":pending,"manual_review":manual_review,"confirmed_chat_deletions":confirmed_deleted,"blocked":cleanup_issues},
+            "browser":browser,
             "requests_needing_attention":request_issues}),
         )
     };
     inspect()
         .unwrap_or_else(|error| json!({"state":"attention_required","error":error.to_string()}))
+}
+
+fn pacing_hint(
+    state: &State,
+    job: &research_core::Job,
+    thread: &research_core::Thread,
+) -> Result<Value> {
+    let pacing = research_browser::pacing::Pacer::new(&state.dir).status()?;
+    let next_at = if matches!(job.state.as_str(), "pacing" | "preparing" | "queued") {
+        let kind = if thread.target.is_none() {
+            research_browser::pacing::Interaction::Navigation
+        } else {
+            research_browser::pacing::Interaction::Account
+        };
+        if thread.target.is_none() {
+            pacing.next_at(kind)
+        } else {
+            pacing.next_at(kind).max(job.send_after.unwrap_or(0))
+        }
+    } else {
+        now()
+    };
+    Ok(
+        json!({"next_browser_action_at":if job.terminal() {Value::Null} else {json!(next_at.max(now()))},
+        "next_wait_seconds":if job.terminal() {0} else {(next_at - now()).clamp(30, 3600)},
+        "polling_loads_page":false}),
+    )
 }
 
 async fn dispatch(state: &State, input: Value) -> Result<Value> {
@@ -146,7 +199,12 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
             let config = Config::load(&state.dir)?;
             let job = state.store.lock().unwrap().submit(&submit, config, now())?;
             state.notify.notify_one();
-            Ok(json!(job))
+            let thread = state.store.lock().unwrap().thread(&job.thread_id)?;
+            let mut result = json!(job);
+            for (key, value) in pacing_hint(state, &job, &thread)?.as_object().unwrap() {
+                result[key] = value.clone();
+            }
+            Ok(result)
         }
         "read_chats" => {
             let chats = input["chats"]
@@ -173,11 +231,7 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
                 now(),
             )?;
             state.notify.notify_one();
-            Ok(crate::transcripts::imported(
-                &state.store.lock().unwrap(),
-                &state.dir,
-                &request,
-            ))
+            imported_hint(state, &request)
         }
         "get" | "wait" => {
             let job = scoped_job(state, &input)?;
@@ -226,8 +280,10 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
                     response["truncated"] = json!(true);
                 }
             }
+            let hint = pacing_hint(state, &job, &thread)?;
             Ok(json!({"request":job,"response_paging":response_paging,
-                    "remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":30,"local_transcript":local_transcript,
+                    "remaining_prompts":10u32.saturating_sub(thread.prompts),"next_wait_seconds":hint["next_wait_seconds"],
+                    "next_browser_action_at":hint["next_browser_action_at"],"polling_loads_page":false,"local_transcript":local_transcript,
                     "service_status":service_status(state,Some(&thread.project))}))
         }
         "response_content" => {
@@ -416,11 +472,28 @@ async fn read_operation(state: &State, input: &Value) -> Result<Value> {
         }
         _ => {}
     }
-    Ok(crate::transcripts::imported(
-        &state.store.lock().unwrap(),
-        &state.dir,
-        &request,
-    ))
+    imported_hint(state, &request)
+}
+
+fn imported_hint(state: &State, request: &research_core::ReadRequest) -> Result<Value> {
+    let next_at = research_browser::pacing::Pacer::new(&state.dir)
+        .status()?
+        .next_at(research_browser::pacing::Interaction::Navigation)
+        .max(now());
+    let mut summary =
+        crate::transcripts::imported(&state.store.lock().unwrap(), &state.dir, request);
+    summary["next_browser_action_at"] = if request.terminal() {
+        Value::Null
+    } else {
+        json!(next_at)
+    };
+    summary["next_wait_seconds"] = json!(if request.terminal() {
+        0
+    } else {
+        (next_at - now()).clamp(30, 3600)
+    });
+    summary["polling_loads_page"] = json!(false);
+    Ok(summary)
 }
 
 #[cfg(test)]

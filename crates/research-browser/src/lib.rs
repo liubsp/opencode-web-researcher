@@ -12,6 +12,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
 mod deletion;
 mod launch;
+pub mod pacing;
+pub mod telemetry;
 
 pub struct Page {
     pub id: String,
@@ -19,6 +21,9 @@ pub struct Page {
     sequence: u64,
     activity: Option<PathBuf>,
     deletion: Option<deletion::Watch>,
+    pacer: Option<pacing::Pacer>,
+    expected_location: Option<String>,
+    action_guard: Option<std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>>,
 }
 
 impl Page {
@@ -39,10 +44,31 @@ impl Page {
             sequence: 0,
             activity: None,
             deletion: None,
+            pacer: None,
+            expected_location: None,
+            action_guard: None,
         })
     }
 
     pub async fn command(&mut self, method: &str, params: Value) -> Result<Value> {
+        if matches!(method, "Page.navigate" | "Page.reload") {
+            self.wait_for_observer().await?;
+            self.interaction(pacing::Interaction::Navigation).await?;
+            self.log_action(if method == "Page.reload" {
+                "reload"
+            } else {
+                "navigate"
+            });
+        } else if method == "Input.insertText"
+            || method == "Input.dispatchKeyEvent" && params["type"] == "keyDown"
+        {
+            self.interaction(pacing::Interaction::Ui).await?;
+            self.verify_action_location().await?;
+        }
+        self.raw_command(method, params).await
+    }
+
+    async fn raw_command(&mut self, method: &str, params: Value) -> Result<Value> {
         if let Some(path) = &self.activity {
             std::fs::write(path, research_core::now().to_string())?;
         }
@@ -94,6 +120,97 @@ impl Page {
         Ok(value["result"]["value"].clone())
     }
 
+    /// UI/account steps wait with cancellation checks; navigation yields without replaying UI work.
+    pub async fn interaction(&self, kind: pacing::Interaction) -> Result<()> {
+        let Some(pacer) = &self.pacer else {
+            return self.check_action_guard();
+        };
+        loop {
+            self.check_action_guard()?;
+            match pacer.admit(kind) {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    if let Some(deferred) = error.downcast_ref::<pacing::Deferred>()
+                        && !matches!(kind, pacing::Interaction::Navigation)
+                        && deferred.next_at > research_core::now()
+                        && deferred.next_at - research_core::now() <= 180
+                    {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    async fn wait_for_observer(&self) -> Result<()> {
+        let Some(pacer) = &self.pacer else {
+            return Ok(());
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                self.check_action_guard()?;
+                let status = pacer.status()?;
+                if status.observer_connected && status.observer_ready_targets.contains(&self.id) {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("Browser network observer is not ready; navigation not dispatched")?
+    }
+
+    pub fn account_ready(&self) -> Result<()> {
+        if let Some(pacer) = &self.pacer {
+            pacer.ready(pacing::Interaction::Account)?;
+        }
+        Ok(())
+    }
+
+    pub fn expect_location(&mut self, url: &str) {
+        self.expected_location = Some(url.to_owned());
+    }
+
+    pub async fn verify_action_location(&mut self) -> Result<()> {
+        self.check_action_guard()?;
+        if let Some(expected) = self.expected_location.clone() {
+            let value = self
+                .raw_command(
+                    "Runtime.evaluate",
+                    json!({"expression":"location.href","returnByValue":true}),
+                )
+                .await?;
+            let actual = value["result"]["value"].as_str().unwrap_or_default();
+            ensure!(
+                same_conversation_url(actual, &expected)
+                    || research_core::valid_project_url(actual)
+                        && same_project_url(actual, &expected),
+                "Browser action destination changed"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn set_action_guard(
+        &mut self,
+        guard: std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>,
+    ) {
+        self.action_guard = Some(guard);
+    }
+    pub fn check_action_guard(&self) -> Result<()> {
+        if let Some(guard) = &self.action_guard {
+            guard()?;
+        }
+        Ok(())
+    }
+    pub fn log_action(&self, operation: &str) {
+        if let Some(pacer) = &self.pacer {
+            pacer.log("ui_action", json!({"operation":operation}));
+        }
+    }
+
     pub async fn watch_deletion(&mut self, expected: &str) -> Result<()> {
         ensure!(conversation_url(expected), "Invalid deletion target");
         self.command("Network.enable", json!({})).await?;
@@ -136,6 +253,7 @@ pub struct Chrome {
     http: reqwest::Client,
     websocket: String,
     activity: Option<PathBuf>,
+    pacer: Option<pacing::Pacer>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -181,6 +299,11 @@ pub fn chrome_path(config: &Config) -> Result<PathBuf> {
 }
 
 impl Chrome {
+    pub async fn ensure_paced(dir: &Path, config: &Config) -> Result<Self> {
+        let mut chrome = Self::ensure(dir, config).await?;
+        chrome.pacer = Some(pacing::Pacer::new(dir));
+        Ok(chrome)
+    }
     /// Check the saved owned browser without launching it or refreshing its activity timer.
     pub async fn close_if_idle(dir: &Path, config: &Config) -> Result<bool> {
         if !config.chrome_auto_close {
@@ -333,6 +456,7 @@ impl Chrome {
             http: http.clone(),
             websocket: String::new(),
             activity: Some(activity.clone()),
+            pacer: None,
         };
         for _ in 0..60 {
             launcher.check()?;
@@ -403,6 +527,7 @@ impl Chrome {
             http,
             websocket: record.websocket.clone(),
             activity: None,
+            pacer: None,
         })
     }
 
@@ -431,9 +556,15 @@ impl Chrome {
             url == "about:blank" || valid_chat_url(url),
             "Only ChatGPT URLs are supported"
         );
+        if let Some(pacer) = &self.pacer {
+            pacer.ready(pacing::Interaction::Navigation)?;
+        }
         let mut browser = self.browser_page().await?;
         let created = browser
-            .command("Target.createTarget", json!({"url":url,"background":true}))
+            .command(
+                "Target.createTarget",
+                json!({"url":if self.pacer.is_some() {"about:blank"} else {url},"background":true}),
+            )
             .await?;
         for _ in 0..20 {
             if let Some(target) = self
@@ -442,7 +573,34 @@ impl Chrome {
                 .into_iter()
                 .find(|t| t["id"] == created["targetId"])
             {
-                return self.attach(&target).await;
+                let mut page = self.attach(&target).await?;
+                if self.pacer.is_some() {
+                    let result = async {
+                        page.wait_for_observer().await?;
+                        self.pacer
+                            .as_ref()
+                            .unwrap()
+                            .admit(pacing::Interaction::Navigation)?;
+                        self.pacer
+                            .as_ref()
+                            .unwrap()
+                            .log("navigation_requested", json!({"reason":"open"}));
+                        page.raw_command("Page.navigate", json!({"url":url}))
+                            .await?;
+                        page.raw_command(
+                            "Emulation.setFocusEmulationEnabled",
+                            json!({"enabled":true}),
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        let _ = self.close(&page.id).await;
+                        return Err(error);
+                    }
+                }
+                return Ok(page);
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -532,6 +690,7 @@ impl Chrome {
         )
         .await?;
         page.activity = self.activity.clone();
+        page.pacer = self.pacer.clone();
         // Keep renderer animations/stream updates alive in a minimized window. This is renderer-only
         // focus emulation, not Page.bringToFront or OS window activation.
         page.command(
@@ -559,6 +718,9 @@ impl Chrome {
                 }
                 return self.attach(&entry).await;
             }
+        }
+        if let Some(pacer) = &self.pacer {
+            pacer.log("reconnect_missing_target", json!({}));
         }
         self.open(url.unwrap_or("https://chatgpt.com/")).await
     }
@@ -713,6 +875,7 @@ mod tests {
                 .build()?,
             websocket: String::new(),
             activity: None,
+            pacer: None,
         };
         chrome.close("one").await?;
         assert!(chrome.close("").await.is_err());
@@ -766,6 +929,7 @@ mod tests {
                     .build()?,
                 websocket: format!("ws://127.0.0.1:{ws_port}/test"),
                 activity: None,
+                pacer: None,
             };
             assert_eq!(
                 chrome.minimize().await.is_ok(),
@@ -1037,6 +1201,7 @@ mod tests {
                 http: reqwest::Client::builder().no_proxy().build()?,
                 websocket: format!("ws://127.0.0.1:{ws_port}/test"),
                 activity: None,
+                pacer: None,
             };
             chrome.minimize().await?;
             chrome.minimize().await?;

@@ -53,6 +53,8 @@ try {
   await mkdir(join(home, "application"));
   await copyFile(binary, preferred);
   await writeFile(join(home, "config.json"), JSON.stringify({ words_per_minute: 1, fixed_pause_seconds: 3600, pause_jitter_seconds: 0, chrome_auto_close: false, chrome_path: join(home, "nonexistent-browser") }));
+  const loadDeadline = Math.floor(Date.now() / 1000) + 86400;
+  await writeFile(join(home, "browser-pacing.json"), JSON.stringify({ next_load_at_ms: loadDeadline * 1000 }));
   running = JSON.parse((await cli(binary, "connect")).stdout);
   const request = { project: "synthetic", session: "synthetic", key: "runtime-test", prompt: "Synthetic work - must never reach ChatGPT", deep_research: false };
   const job = await rpc(running, { op: "submit", request });
@@ -79,6 +81,10 @@ try {
   assert.equal((await rpc(running, { op: "submit", request })).id, job.id);
   const retained = await rpc(running, { op: "get", id: job.id, project: request.project });
   assert.equal(retained.request.submitted_at, null);
+  assert.equal(retained.polling_loads_page, false);
+  assert.equal(retained.next_browser_action_at, loadDeadline);
+  for (let i = 0; i < 20; i++) await rpc(running, { op: "get", id: job.id, project: request.project });
+  assert.equal(JSON.parse(await readFile(join(home, "browser-pacing.json"), "utf8")).next_load_at_ms, loadDeadline * 1000, "Polling extended or consumed the shared deadline");
   await cli(preferred, "activate");
   assert.equal((await descriptor()).instance, running.instance);
   await rpc(running, { op: "cancel", id: job.id, project: request.project });

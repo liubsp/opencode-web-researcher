@@ -40,6 +40,36 @@ pub async fn verify_project(page: &mut Page, expected: &str) -> Result<()> {
 }
 
 async fn action(page: &mut Page, op: &str, argument: Value) -> Result<Value> {
+    if !matches!(
+        op,
+        "model_status"
+            | "reasoning_status"
+            | "deleted"
+            | "deletion_state"
+            | "cleanup_stage"
+            | "can_start_report"
+            | "stop"
+            | "send"
+    ) {
+        page.interaction(if matches!(op, "confirm_delete" | "start_report") {
+            research_browser::pacing::Interaction::Account
+        } else {
+            research_browser::pacing::Interaction::Ui
+        })
+        .await?;
+        page.verify_action_location().await?;
+    }
+    if !matches!(
+        op,
+        "model_status"
+            | "reasoning_status"
+            | "deleted"
+            | "deletion_state"
+            | "cleanup_stage"
+            | "can_start_report"
+    ) {
+        page.log_action(op);
+    }
     page.eval(&format!(
         "({ACTION})({})",
         json!({"op":op,"argument":argument})
@@ -162,12 +192,20 @@ pub async fn fill_managed(
     let state = inspect(page).await?;
     let actual = state["composer_text"].as_str().unwrap_or_default();
     written(actual)?;
-    ensure!(actual == text, "composer_mismatch: not sending");
+    ensure!(
+        actual == text,
+        "composer_mismatch: not sending (expected {} characters, found {})",
+        text.chars().count(),
+        actual.chars().count()
+    );
     Ok(())
 }
 
 /// The caller must preserve and identify an unsent managed prompt before clearing it.
 pub async fn clear_managed_draft(page: &mut Page, expected: &str) -> Result<()> {
+    page.interaction(research_browser::pacing::Interaction::Ui)
+        .await?;
+    page.verify_action_location().await?;
     // Check and delete in one browser evaluation; never clear an edited or unrelated draft.
     let result = page
         .eval(&format!(
@@ -185,14 +223,41 @@ pub async fn clear_managed_draft(page: &mut Page, expected: &str) -> Result<()> 
 
 /// Caller must persist submission intent before calling this function.
 pub async fn send(page: &mut Page) -> Result<()> {
+    send_managed(page, None, |_| Ok(true)).await.map(|_| ())
+}
+
+/// Pacing precedes durable intent. A denied slot must never look like an ambiguous submission.
+pub async fn send_managed(
+    page: &mut Page,
+    expected: Option<&str>,
+    before_send: impl FnOnce(&Value) -> Result<bool>,
+) -> Result<bool> {
+    page.interaction(research_browser::pacing::Interaction::Account)
+        .await?;
+    page.verify_action_location().await?;
+    let snapshot = inspect(page).await?;
+    if let Some(prompt) = expected {
+        ensure!(
+            snapshot["composer_text"].as_str()
+                == Some(research_core::canonical_prompt(prompt).as_str())
+                && snapshot["busy"] != true,
+            "draft_changed: refusing to send after pacing"
+        );
+    }
+    if !before_send(&snapshot)? {
+        return Ok(false);
+    }
     ensure!(
         action(page, "send", Value::Null).await?["ok"] == true,
         "send_not_confirmed"
     );
-    Ok(())
+    Ok(true)
 }
 
 pub async fn start_deep_report(page: &mut Page) -> Result<bool> {
+    if action(page, "can_start_report", Value::Null).await?["ok"] != true {
+        return Ok(false);
+    }
     Ok(action(page, "start_report", Value::Null).await?["ok"] == true)
 }
 
@@ -210,10 +275,16 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
     if action(page, "deleted", json!(expected_url)).await?["ok"] == true {
         return Ok("ui_notice");
     }
+    let stage = action(page, "cleanup_stage", json!(expected_url)).await?;
+    ensure!(
+        stage["confirmed"] != true,
+        "deletion_unknown: previous confirmation has no acknowledgement; refusing to repeat it"
+    );
     // The composer can mount before conversation hydration/menu controls. Wait
     // for an identity-bound menu rather than mistaking that intermediate UI for failure.
-    let mut opened = false;
-    for attempt in 0..60 {
+    let confirming = stage["confirming"] == true;
+    let mut opened = confirming;
+    for attempt in 0..if confirming { 0 } else { 60 } {
         if action(page, "deleted", json!(expected_url)).await?["ok"] == true {
             return Ok("ui_notice");
         }
@@ -254,13 +325,15 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
         opened,
         "delete_unavailable: cannot locate the owned conversation menu after hydration"
     );
-    ensure!(
-        wait_cleanup_control(page, "delete_menu_item", expected_url).await,
-        "delete_unavailable: owned menu has no unique Delete control"
-    );
+    if !confirming {
+        ensure!(
+            wait_cleanup_control(page, "delete_menu_item", expected_url).await?,
+            "delete_unavailable: owned menu has no unique Delete control"
+        );
+    }
     page.watch_deletion(expected_url).await?;
     ensure!(
-        wait_cleanup_control(page, "confirm_delete", expected_url).await,
+        wait_cleanup_control(page, "confirm_delete", expected_url).await?,
         "delete_confirmation_unavailable: owned deletion dialog is missing or ambiguous"
     );
     if let Some(evidence) = wait_for_deletion(page, expected_url).await {
@@ -282,16 +355,22 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
     bail!("deletion_unknown: confirmation was clicked but deletion could not be verified")
 }
 
-async fn wait_cleanup_control(page: &mut Page, op: &str, expected_url: &str) -> bool {
+async fn wait_cleanup_control(page: &mut Page, op: &str, expected_url: &str) -> Result<bool> {
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if let Ok(result) = action(page, op, json!(expected_url)).await
-            && result["ok"] == true
-        {
-            return true;
+        match action(page, op, json!(expected_url)).await {
+            Ok(result) if result["ok"] == true => return Ok(true),
+            Err(error)
+                if error
+                    .downcast_ref::<research_browser::pacing::Deferred>()
+                    .is_some() =>
+            {
+                return Err(error);
+            }
+            _ => {}
         }
     }
-    false
+    Ok(false)
 }
 
 async fn wait_for_deletion(page: &mut Page, expected_url: &str) -> Option<&'static str> {

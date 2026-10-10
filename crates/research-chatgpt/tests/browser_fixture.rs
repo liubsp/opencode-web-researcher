@@ -65,6 +65,117 @@ fn fixture_dir() -> Result<Fixture> {
 }
 
 #[tokio::test]
+#[ignore = "Requires installed Chrome; paced synthetic controls and passive observer, no account message"]
+async fn paced_ui_and_navigation_share_deadlines_but_urgent_stop_is_immediate() -> Result<()> {
+    use research_browser::pacing::{Interaction, Pacer};
+    use std::time::{Duration, Instant};
+    let dir = fixture_dir()?;
+    struct Restore {
+        path: std::path::PathBuf,
+        bytes: Option<Vec<u8>>,
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(bytes) = &self.bytes {
+                let _ = std::fs::write(&self.path, bytes);
+            } else {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
+    let config_path = dir.join("config.json");
+    let _restore = Restore {
+        bytes: std::fs::read(&config_path).ok(),
+        path: config_path.clone(),
+    };
+    let config = Config {
+        ui_action_delay_min_seconds: 1,
+        ui_action_delay_max_seconds: 1,
+        account_action_delay_min_seconds: 1,
+        account_action_delay_max_seconds: 1,
+        page_load_delay_min_seconds: 60,
+        page_load_delay_max_seconds: 60,
+        ..Config::default()
+    };
+    std::fs::write(config_path, serde_json::to_vec(&config)?)?;
+    let chrome = Chrome::ensure_paced(&dir, &config).await?;
+    let observer = tokio::spawn(research_browser::telemetry::run(dir.to_path_buf()));
+    let pacer = Pacer::new(&dir);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !pacer.status().unwrap().observer_connected {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await?;
+    let mut page = chrome.open("about:blank").await?;
+    let deadline = pacer.status()?.next_load_at_ms;
+    let targets = chrome.targets().await?.len();
+    assert!(
+        chrome
+            .open("about:blank")
+            .await
+            .err()
+            .unwrap()
+            .downcast_ref::<research_browser::pacing::Deferred>()
+            .is_some()
+    );
+    assert!(
+        page.command("Page.reload", json!({}))
+            .await
+            .unwrap_err()
+            .downcast_ref::<research_browser::pacing::Deferred>()
+            .is_some()
+    );
+    assert_eq!(chrome.targets().await?.len(), targets);
+    page.eval(r#"document.body.innerHTML='<form><div id="prompt-textarea" contenteditable="true"><p><br class="ProseMirror-trailingBreak"></p></div><button type="button" data-testid="send-button" onclick="window.sent=(window.sent||0)+1">Send</button></form>'"#).await?;
+    research_chatgpt::fill(&mut page, "synthetic text").await?;
+    research_chatgpt::send_managed(&mut page, Some("synthetic text"), |_| Ok(true)).await?;
+    assert_eq!(page.eval("window.sent").await?, 1);
+    assert_eq!(pacer.status()?.next_load_at_ms, deadline);
+    page.eval(r#"document.body.insertAdjacentHTML('beforeend','<button aria-label="Stop generating" onclick="window.stopped=true">Stop</button>')"#).await?;
+    observer.abort();
+    let _ = observer.await;
+    pacer.observed("observer_disconnected", None, None)?;
+    let mut blocked = serde_json::to_value(pacer.status()?)?;
+    blocked["next_ui_at_ms"] = json!(research_core::now() * 1000 + 600000);
+    std::fs::write(
+        dir.join("browser-pacing.json"),
+        serde_json::to_vec(&blocked)?,
+    )?;
+    let start = Instant::now();
+    assert!(research_chatgpt::stop(&mut page).await?);
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_eq!(page.eval("window.stopped").await?, true);
+    page.set_action_guard(std::sync::Arc::new(|| {
+        anyhow::bail!("synthetic cancellation")
+    }));
+    let start = Instant::now();
+    assert!(page.interaction(Interaction::Ui).await.is_err());
+    assert!(start.elapsed() < Duration::from_secs(2));
+    let events = std::fs::read_to_string(dir.join("browser-events.jsonl"))?;
+    let admitted: Vec<serde_json::Value> = events
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?;
+    let admitted: Vec<_> = admitted
+        .iter()
+        .filter(|event| event["event"] == "interaction_admitted")
+        .collect();
+    assert!(admitted.len() >= 4);
+    assert!(
+        admitted
+            .windows(2)
+            .all(
+                |pair| pair[1]["at_ms"].as_i64().unwrap() - pair[0]["at_ms"].as_i64().unwrap()
+                    >= 1000
+            )
+    );
+    assert!(!events.contains("synthetic text"));
+    chrome.close(&page.id).await?;
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "Requires installed Chrome; isolated text round-trips, no account message"]
 async fn canonical_line_endings_preserve_zero_width_content() -> Result<()> {
     let dir = fixture_dir()?;

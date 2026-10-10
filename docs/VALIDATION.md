@@ -137,6 +137,26 @@ the conversation appeared under that project in the sidebar. The migrated login 
   the loaded read-only OpenCode health tool uses the new server and still rejects other agents.
   Neither OpenCode nor agents were restarted. Inaccessibility remains unconfirmed, not deleted.
 
+### Shared action pacing and diagnostics
+
+- Policy tests cover action-specific randomized ranges, overlapping deadlines, restart persistence,
+  concurrent admission through independent workers, global HTTP 429 backoff, and fail-closed corrupt state.
+- All 17 isolated Chrome fixtures pass. The paced fixture checks individual UI/input/Send spacing,
+  blocked reload and tab creation without side effects, unchanged page-load deadlines after UI work,
+  immediate Stop despite a cooldown, cancellation before an action, passive observer attachment,
+  and prompt-free diagnostic output. It uses ChatGPT's empty-composer trailing-break markup.
+- The real CLI lifecycle test polls queued work 20 times and verifies that neither browser actions
+  nor persistent load deadlines change. It never launches Chrome or submits an account message.
+- Independent telemetry tests reject non-ChatGPT origins, correlate requests by CDP session,
+  discard private payloads, and parse both numeric and HTTP-date `Retry-After` headers.
+- Installed activation preserved every original request, thread record, import, transcript, and
+  archive byte. The existing OpenCode service executed the updated installed read-only tool and
+  rejected a non-research agent without restarting OpenCode or agents. Twenty installed health
+  polls caused no browser admission or observed document load.
+- Full Rust and TypeScript checks/tests, release/plugin builds, isolated locked-launcher installation,
+  and the browser/daemon idle lifecycle tests pass locally. These checks do not establish the cause
+  of earlier reported throttling or guarantee that the account will never be throttled.
+
 ## In progress
 
 The published Windows bootstrap script and its remote source download were exercised in an isolated

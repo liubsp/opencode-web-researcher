@@ -109,6 +109,7 @@ async fn serve_inner(dir: PathBuf) -> Result<()> {
         std::fs::remove_file(dir.join("service.json"))?;
     }
     std::fs::rename(tmp, dir.join("service.json"))?;
+    let observer = tokio::spawn(research_browser::telemetry::run(dir.clone()));
     let worker = tokio::spawn(worker::run(state.clone()));
     let result = axum::serve(listener, api::router(state))
         .with_graceful_shutdown(async move {
@@ -117,6 +118,10 @@ async fn serve_inner(dir: PathBuf) -> Result<()> {
         .await;
     worker.abort();
     let _ = worker.await;
+    observer.abort();
+    let _ = observer.await;
+    let _ =
+        research_browser::pacing::Pacer::new(&dir).observed("observer_disconnected", None, None);
     let _ = std::fs::remove_file(dir.join("service.json"));
     result?;
     Ok(())

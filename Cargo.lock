@@ -1110,6 +1110,7 @@ dependencies = [
  "anyhow",
  "fs2",
  "futures-util",
+ "httpdate",
  "reqwest",
  "research-core",
  "serde",

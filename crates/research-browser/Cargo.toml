@@ -15,6 +15,7 @@ tokio-tungstenite = "0.28"
 futures-util = "0.3"
 url = "2"
 fs2 = "0.4"
+httpdate = "1"
 uuid.workspace = true
 
 [dev-dependencies]

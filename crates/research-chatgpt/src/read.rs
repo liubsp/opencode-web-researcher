@@ -19,6 +19,8 @@ const SCROLL: &str = r#"(op => {
 
 /// Read only the currently rendered branch. No composer, menu, model, or Send interactions.
 pub async fn capture_rendered_chat(page: &mut Page) -> Result<Value> {
+    page.interaction(research_browser::pacing::Interaction::Ui)
+        .await?;
     page.eval(&format!("({SCROLL})('top')")).await?;
     // Allow history loaded by scrolling to the beginning to settle.
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -73,6 +75,8 @@ pub async fn capture_rendered_chat(page: &mut Page) -> Result<Value> {
             break;
         }
         previous = fingerprint;
+        page.interaction(research_browser::pacing::Interaction::Ui)
+            .await?;
         page.eval(&format!("({SCROLL})('next')")).await?;
         tokio::time::sleep(Duration::from_millis(500)).await;
     }

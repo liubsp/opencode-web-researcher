@@ -78,6 +78,12 @@ pub struct Config {
     pub chrome_auto_close: bool,
     #[serde(skip_serializing_if = "default_retention")]
     pub chrome_idle_timeout_minutes: u64,
+    pub ui_action_delay_min_seconds: u64,
+    pub ui_action_delay_max_seconds: u64,
+    pub account_action_delay_min_seconds: u64,
+    pub account_action_delay_max_seconds: u64,
+    pub page_load_delay_min_seconds: u64,
+    pub page_load_delay_max_seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chatgpt_project_url: Option<String>,
 }
@@ -98,6 +104,12 @@ impl Default for Config {
             chrome_path: None,
             chrome_auto_close: true,
             chrome_idle_timeout_minutes: 30,
+            ui_action_delay_min_seconds: 2,
+            ui_action_delay_max_seconds: 5,
+            account_action_delay_min_seconds: 60,
+            account_action_delay_max_seconds: 180,
+            page_load_delay_min_seconds: 300,
+            page_load_delay_max_seconds: 600,
             chatgpt_project_url: None,
         }
     }
@@ -105,6 +117,28 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        for (name, min, max) in [
+            (
+                "ui_action_delay",
+                self.ui_action_delay_min_seconds,
+                self.ui_action_delay_max_seconds,
+            ),
+            (
+                "account_action_delay",
+                self.account_action_delay_min_seconds,
+                self.account_action_delay_max_seconds,
+            ),
+            (
+                "page_load_delay",
+                self.page_load_delay_min_seconds,
+                self.page_load_delay_max_seconds,
+            ),
+        ] {
+            ensure!(
+                (1..=3600).contains(&min) && (min..=3600).contains(&max),
+                "{name} range must be ordered and within 1..3600 seconds"
+            );
+        }
         ensure!(
             (1..=525600).contains(&self.chrome_idle_timeout_minutes),
             "chrome_idle_timeout_minutes must be 1..525600"

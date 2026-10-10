@@ -1,6 +1,34 @@
 use research_core::Config;
 
 #[test]
+fn action_pacing_defaults_and_ranges_are_backward_compatible() {
+    let mut c: Config = serde_json::from_str("{}").unwrap();
+    assert_eq!(
+        (c.ui_action_delay_min_seconds, c.ui_action_delay_max_seconds),
+        (2, 5)
+    );
+    assert_eq!(
+        (
+            c.account_action_delay_min_seconds,
+            c.account_action_delay_max_seconds
+        ),
+        (60, 180)
+    );
+    assert_eq!(
+        (c.page_load_delay_min_seconds, c.page_load_delay_max_seconds),
+        (300, 600)
+    );
+    c.validate().unwrap();
+    c.ui_action_delay_min_seconds = 0;
+    assert!(c.validate().is_err());
+    c.ui_action_delay_min_seconds = 6;
+    assert!(c.validate().is_err());
+    c.ui_action_delay_min_seconds = 2;
+    c.page_load_delay_max_seconds = 3601;
+    assert!(c.validate().is_err());
+}
+
+#[test]
 fn inactivity_range_defaults_and_validation() {
     let mut config: Config = serde_json::from_str("{}").unwrap();
     assert_eq!(

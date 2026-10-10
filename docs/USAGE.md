@@ -78,6 +78,11 @@ opencode-web-researcher shutdown
   `cleanup.manual_review`, separately from retryable `cleanup.pending`. Archives remain retained;
   the service won't reopen Chrome for these records. An explicit `retire` operation starts another
   bounded retry series after access is restored. Existing exhausted retries stop on upgrade.
+- **Page loading or throttling:** inspect `service_status.browser` and the local, sanitized
+  `browser-events.jsonl`. The service paces actions across all projects; status polling does not
+  reload pages. UI steps normally wait 2–5 seconds, account actions 1–3 minutes, and full page loads
+  5–10 minutes. These waits overlap. Follow `next_wait_seconds` when choosing a polling interval;
+  do not manually reload an active research tab. HTTP 429 responses impose a shared backoff.
 
 `browser-check` exercises a blank tab and checks minimized state and `navigator.webdriver`.
 `browser-inspect` reports readiness and control labels, not transcripts. Don't navigate or manually

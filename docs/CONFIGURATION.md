@@ -29,7 +29,13 @@ inherit the same value. This selects a different data directory, including its p
   "deep_research_timeout_seconds": 1800,
   "chrome_path": null,
   "chrome_auto_close": true,
-  "chrome_idle_timeout_minutes": 30
+  "chrome_idle_timeout_minutes": 30,
+  "ui_action_delay_min_seconds": 2,
+  "ui_action_delay_max_seconds": 5,
+  "account_action_delay_min_seconds": 60,
+  "account_action_delay_max_seconds": 180,
+  "page_load_delay_min_seconds": 300,
+  "page_load_delay_max_seconds": 600
 }
 ```
 
@@ -55,6 +61,43 @@ Neither another thread/project nor time already spent queued grants credit.
 Restarting conservatively restarts the current pacing interval and refreshes its `send_after` estimate.
 Timeouts and ambiguous submissions don't authorize overlapping generations. Read-only source imports
 send no prompts and don't consume this budget.
+
+### Shared browser action pacing
+
+All automatic browser work uses the same durable scheduler, across projects, research requests,
+imports, cleanup, and recovery. Each menu click, selection, keyboard action, text insertion, or
+scroll waits for the UI cooldown (randomized 2–5 seconds by default). Send, Start research, and
+deletion confirmation also respect the account-action cooldown (1–3 minutes). Full navigation,
+including reopening a lost tab or a cleanup fallback, respects the page-load cooldown (5–10 minutes).
+Each configured range must be ordered and within 1–3600 seconds.
+
+These are overlapping deadlines, not delays added together. A menu click doesn't extend the
+page-load deadline, and the page-load cooldown doesn't prevent ordinary controls from being used.
+Page loading can overlap prompt composition. Deadlines use millisecond precision, persist in
+`browser-pacing.json`, and aren't redrawn or extended by polling. A page is never reloaded merely
+because its cooldown expired. Passive DOM inspection and local tab closure consume no action slot.
+Stop is an urgent safety exception; cancellation also interrupts a pending action before it executes.
+Imports and cleanup wait while a managed generation is being observed so they cannot delay Stop.
+
+Status and result retrieval are browser-free. Results provide `next_wait_seconds` and, for managed
+requests, `next_browser_action_at` (Unix seconds) as polling hints, not commands to refresh ChatGPT.
+The service rereads browser pacing settings live; queued requests keep their existing composition policy.
+
+### Navigation diagnostics
+
+An independent, passive CDP observer records document requests, failed ChatGPT requests, and HTTP
+errors while connected. Before navigating a newly created background tab, the service waits for
+the observer's network-enable acknowledgement so it can capture the initial document request.
+Observer readiness never activates a window or sends an account request. An observed HTTP 429 pauses all ordinary action classes for `Retry-After`
+(seconds or an HTTP date), or 15 minutes when that header is unavailable. It does not resend work.
+Health exposes the shared deadlines, counters, and observer connection state under
+`service_status.browser`; raw deadline fields ending in `_ms` use Unix milliseconds.
+
+`browser-events.jsonl` records timestamped admission, UI attempts, navigation reasons, RPC operations,
+and sanitized network events. It retains one previous file and rotates at roughly 1 MiB per file.
+It never logs URLs, request/response bodies, prompts, cookies, or authorization headers. Keep these
+files local and out of source control. Observer downtime is explicit; neither missing historical
+logs nor an observation with zero errors proves that throttling never occurred.
 
 ## Idle browser lifecycle
 

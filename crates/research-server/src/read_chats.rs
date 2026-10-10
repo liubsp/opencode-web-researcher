@@ -6,6 +6,17 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 pub async fn process_next(state: &State) -> Result<()> {
+    if let Err(error) = research_browser::pacing::Pacer::new(&state.dir)
+        .ready(research_browser::pacing::Interaction::Navigation)
+    {
+        if error
+            .downcast_ref::<research_browser::pacing::Deferred>()
+            .is_some()
+        {
+            return Ok(());
+        }
+        return Err(error);
+    }
     let mut request = {
         let store = state.store.lock().unwrap();
         let Some(mut request) = store.next_read()? else {
@@ -16,7 +27,14 @@ pub async fn process_next(state: &State) -> Result<()> {
         request
     };
     let reference = request.chats[request.results.len()].clone();
-    let result = read_chat(state, &reference).await;
+    let result = read_chat(state, &reference, &request.id).await;
+    if result.as_ref().err().is_some_and(|error| {
+        error
+            .downcast_ref::<research_browser::pacing::Deferred>()
+            .is_some()
+    }) {
+        return Ok(());
+    }
     // Cancellation may arrive while the browser read is in progress.
     let store = state.store.lock().unwrap();
     request = store.read_request(&request.id)?;
@@ -40,11 +58,20 @@ pub async fn process_next(state: &State) -> Result<()> {
     Ok(())
 }
 
-async fn read_chat(state: &State, reference: &ChatReference) -> Result<Value> {
+async fn read_chat(state: &State, reference: &ChatReference, request_id: &str) -> Result<Value> {
     let config = Config::load(&state.dir)?;
-    let chrome = Chrome::ensure(&state.dir, &config).await?;
+    let chrome = Chrome::ensure_paced(&state.dir, &config).await?;
     // Use a dedicated read tab; never navigate an existing user/managed tab or register ownership.
     let mut page = chrome.open(&reference.url).await?;
+    let store = state.store.clone();
+    let id = request_id.to_owned();
+    page.set_action_guard(std::sync::Arc::new(move || {
+        ensure!(
+            !store.lock().unwrap().read_request(&id)?.terminal(),
+            "Browser read cancelled"
+        );
+        Ok(())
+    }));
     let capture = async {
         let mut loaded = false;
         for _ in 0..30 {

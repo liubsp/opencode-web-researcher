@@ -142,7 +142,14 @@
     controls().find(el => el.closest('form')?.querySelector(composerSelector) && /^send$/i.test(label(el))));
   if (op === 'stop') return click(controls().find(el => !el.closest('nav,aside') &&
     (/stop-button|composer-stop-button/.test(el.dataset.testid || el.id) || /^stop(?: generating| streaming| response| research)?$/i.test(label(el)))));
-  if (op === 'start_report') return click(controls().find(el => !el.closest('nav,aside') && /^start research$/i.test(label(el))));
+  if (op === 'start_report' || op === 'can_start_report') {
+    const button = controls().find(el => !el.closest('nav,aside') && /^start research$/i.test(label(el)));
+    return op === 'can_start_report' ? {ok:!!button && !button.disabled && button.getAttribute('aria-disabled') !== 'true'} : click(button);
+  }
+  if (op === 'cleanup_stage') {
+    const binding = cleanupBinding(argument);
+    return {confirming:!!binding?.confirming,confirmed:!!binding?.confirmed};
+  }
   if (op === 'open_chat_menu') {
     // Bind either the open conversation or its exact row in the owned project.
     if (!cleanupContext(argument)) return {ok:false,error:'deletion_target_changed'};

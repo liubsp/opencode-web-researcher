@@ -51,28 +51,35 @@ pub async fn run(state: State) {
         match job {
             Ok(Some(mut job)) => {
                 if let Err(error) = process(&state, &mut job, &mut pacing, &mut stop_clock).await {
-                    let mut store = state.store.lock().unwrap();
-                    // Reload to avoid overwriting a concurrently requested cancellation.
-                    if let Ok(mut current) = store.job(&job.id) {
-                        if matches!(current.state.as_str(), "queued" | "pacing" | "preparing") {
-                            let _ = store.finish(
-                                &mut current,
-                                "failed",
-                                Some(error.to_string()),
-                                now(),
-                            );
-                        } else if !current.terminal() && current.state != "cancel_requested" {
-                            current.state = if current.state == "submitting" {
-                                "submission_unknown"
-                            } else {
-                                "needs_attention"
+                    if error
+                        .downcast_ref::<research_browser::pacing::Deferred>()
+                        .is_some()
+                    {
+                        // The same persisted work remains queued; admission denial isn't failure.
+                    } else {
+                        let mut store = state.store.lock().unwrap();
+                        // Reload to avoid overwriting a concurrently requested cancellation.
+                        if let Ok(mut current) = store.job(&job.id) {
+                            if matches!(current.state.as_str(), "queued" | "pacing" | "preparing") {
+                                let _ = store.finish(
+                                    &mut current,
+                                    "failed",
+                                    Some(error.to_string()),
+                                    now(),
+                                );
+                            } else if !current.terminal() && current.state != "cancel_requested" {
+                                current.state = if current.state == "submitting" {
+                                    "submission_unknown"
+                                } else {
+                                    "needs_attention"
+                                }
+                                .into();
+                                current.error = Some(error.to_string());
+                                let _ = store.save_progress(&mut current);
                             }
-                            .into();
-                            current.error = Some(error.to_string());
-                            let _ = store.save_progress(&mut current);
                         }
+                        eprintln!("Request {} needs attention: {error}", job.id);
                     }
-                    eprintln!("Request {} needs attention: {error}", job.id);
                 }
                 let store = state.store.lock().unwrap();
                 if let Ok(current) = store.job(&job.id)
@@ -84,7 +91,14 @@ pub async fn run(state: State) {
             Ok(None) => {}
             Err(error) => eprintln!("Queue error: {error}"),
         }
-        if let Err(error) = crate::read_chats::process_next(&state).await {
+        let generating = state
+            .store
+            .lock()
+            .unwrap()
+            .generation_in_progress()
+            .unwrap_or(true);
+        // Long, paced imports/cleanup must not delay observation or an urgent Stop.
+        if !generating && let Err(error) = crate::read_chats::process_next(&state).await {
             eprintln!("Chat read failed: {error}");
         }
         if last_cleanup.elapsed() >= Duration::from_secs(60) {
@@ -114,7 +128,7 @@ pub async fn run(state: State) {
             if let Err(error) = export() {
                 eprintln!("Transcript recovery failed: {error}");
             }
-            if let Err(error) = cleanup(&state).await {
+            if !generating && let Err(error) = cleanup(&state).await {
                 eprintln!("Cleanup error: {error}");
             }
             if let Err(error) = close_idle_browser(&state).await {
@@ -135,6 +149,7 @@ async fn process(
     pacing: &mut PacingClock,
     stop_clock: &mut StopClock,
 ) -> Result<()> {
+    let mut composition_ready = true;
     if job.state == "pacing" {
         // Waiting does not hold the store lock; list/cancel/status stay responsive.
         let mut store = state.store.lock().unwrap();
@@ -146,17 +161,21 @@ async fn process(
         if before != job.send_after && !store.save_progress(job)? {
             return Ok(());
         }
-        if !ready {
-            return Ok(());
+        composition_ready = ready;
+        if ready {
+            job.state = "preparing".into();
+            if !store.save_progress(job)? {
+                return Ok(());
+            }
+            pacing.active = None;
         }
-        job.state = "preparing".into();
-        if !store.save_progress(job)? {
-            return Ok(());
-        }
-        pacing.active = None;
     }
     let mut thread = state.store.lock().unwrap().thread(&job.thread_id)?;
-    let chrome = Chrome::ensure(&state.dir, &job.config).await?;
+    if thread.target.is_none() {
+        research_browser::pacing::Pacer::new(&state.dir)
+            .ready(research_browser::pacing::Interaction::Navigation)?;
+    }
+    let chrome = Chrome::ensure_paced(&state.dir, &job.config).await?;
     let observing = matches!(
         job.state.as_str(),
         "submitting" | "waiting" | "timed_out" | "cancel_requested"
@@ -182,6 +201,27 @@ async fn process(
         .await?;
     thread.target = Some(page.id.clone());
     state.store.lock().unwrap().save_thread(&thread)?;
+    // Loading and composition happen concurrently, not as two consecutive delays.
+    if !composition_ready {
+        return Ok(());
+    }
+    if let Some(expected) = thread.url.as_ref().or_else(|| {
+        (job.state == "preparing")
+            .then_some(thread.chatgpt_project_url.as_ref())
+            .flatten()
+    }) {
+        page.expect_location(expected);
+    }
+    let store = state.store.clone();
+    let id = job.id.clone();
+    page.set_action_guard(std::sync::Arc::new(move || {
+        let current = store.lock().unwrap().job(&id)?;
+        ensure!(
+            !current.terminal() && current.state != "cancel_requested",
+            "Browser action cancelled"
+        );
+        Ok(())
+    }));
     if job.state == "preparing" {
         state.store.lock().unwrap().checkpoint(job, &state.dir)?;
         if thread.url.is_none()
@@ -234,16 +274,25 @@ async fn process(
         .await?;
         job.baseline = Some(setup["state"]["turns"].as_array().map_or(0, Vec::len));
         job.submission = chatgpt::observation::submission_anchor(&setup["state"]);
-        // Persist intent before Send. A crash beyond this boundary never causes automatic resubmission.
-        job.state = "submitting".into();
-        job.submitted_at = Some(now());
-        job.selection = Some(
-            json!({"reasoning":setup["reasoning"],"mode":if thread.deep_research {"deep_research"} else {"auto"}}),
-        );
-        if !state.store.lock().unwrap().save_progress(job)? {
+        let prompt = job.prompt.clone();
+        if !chatgpt::send_managed(&mut page, Some(&prompt), |snapshot| {
+            let mut store = state.store.lock().unwrap();
+            let current = store.job(&job.id)?;
+            if current.terminal() || current.state == "cancel_requested" { return Ok(false); }
+            ensure!(snapshot["turns"].as_array().map_or(0, Vec::len) == job.baseline.unwrap_or(0), "conversation_changed: refusing to send after pacing");
+            if let Some(expected) = &thread.url {
+                ensure!(snapshot["url"].as_str().is_some_and(|actual| research_browser::same_conversation_url(actual, expected)), "conversation_changed: refusing to send to another chat");
+            } else if let Some(expected) = &thread.chatgpt_project_url {
+                ensure!(snapshot["url"].as_str().is_some_and(|actual| research_core::valid_project_url(actual) && research_browser::same_project_url(actual, expected)), "project_changed: refusing to send after pacing");
+            }
+            // Admission precedes intent; denied slots cannot manufacture ambiguous submissions.
+            job.state = "submitting".into();
+            job.submitted_at = Some(now());
+            job.selection = Some(json!({"reasoning":setup["reasoning"],"mode":if thread.deep_research {"deep_research"} else {"auto"}}));
+            store.save_progress(job)
+        }).await? {
             return Ok(());
         }
-        chatgpt::send(&mut page).await?;
     }
     observe(state, job, &mut thread, &mut page, stop_clock).await
 }
@@ -490,7 +539,11 @@ async fn cleanup(state: &State) -> Result<()> {
                 thread.cleanup_inaccessible_attempts = Some(0);
             }
             Err(error) => {
-                schedule_cleanup_retry(&mut thread, error.to_string());
+                if let Some(deferred) = error.downcast_ref::<research_browser::pacing::Deferred>() {
+                    thread.cleanup_retry_at = deferred.next_at;
+                } else {
+                    schedule_cleanup_retry(&mut thread, error.to_string());
+                }
             }
         }
         state.store.lock().unwrap().save_thread(&thread)?;
@@ -570,7 +623,11 @@ async fn retire_remote(state: &State, thread: &mut Thread, config: &Config) -> R
             );
             return Ok(());
         }
-        let chrome = Chrome::ensure(&state.dir, config).await?;
+        if thread.target.is_none() {
+            research_browser::pacing::Pacer::new(&state.dir)
+                .ready(research_browser::pacing::Interaction::Navigation)?;
+        }
+        let chrome = Chrome::ensure_paced(&state.dir, config).await?;
         let mut page = match chrome.reconnect(thread.target.as_deref(), Some(url)).await {
             Ok(page) => page,
             Err(_) => {
@@ -584,9 +641,9 @@ async fn retire_remote(state: &State, thread: &mut Thread, config: &Config) -> R
                             .is_some_and(|current| reusable_cleanup_location(current, url))
                 });
                 if reusable {
-                    let mut page = chrome.reconnect(thread.target.as_deref(), None).await?;
-                    page.command("Page.navigate", json!({"url":url})).await?;
-                    page
+                    // A paced fallback may already have reached the authoritative project
+                    // row. Keep that owned location instead of bouncing back to the chat.
+                    chrome.reconnect(thread.target.as_deref(), None).await?
                 } else {
                     chrome.open(url).await?
                 }
