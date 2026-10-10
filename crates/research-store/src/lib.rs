@@ -145,6 +145,7 @@ impl Store {
                 cleanup_retry_at: 0,
                 cleanup_inaccessible_attempts: Some(0),
                 deletion_receipt: None,
+                deletion_confirmation_pending_since: None,
             }
         };
         thread.prompts += 1;

@@ -491,8 +491,23 @@ async fn cleanup(state: &State) -> Result<()> {
     let config = Config::load(&state.dir)?;
     let threads = state.store.lock().unwrap().threads(None)?;
     for mut thread in threads {
+        // Older versions recorded ambiguous confirmation in the error instead of a checkpoint.
+        // Adopt it before archive/browser work; loss of the in-page binding must never allow replay.
+        if thread.deletion_confirmation_pending_since.is_none()
+            && thread.deletion_receipt.is_none()
+            && thread
+                .cleanup_error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("deletion_unknown:"))
+        {
+            thread.deletion_confirmation_pending_since = Some(now());
+            state.store.lock().unwrap().save_thread(&thread)?;
+        }
         if thread.state == "remote_deleted"
-            || thread.state == "deletion_inaccessible" && thread.deletion_receipt.is_none()
+            || matches!(
+                thread.state.as_str(),
+                "deletion_inaccessible" | "deletion_unconfirmed"
+            ) && thread.deletion_receipt.is_none()
         {
             continue;
         }
@@ -563,6 +578,16 @@ fn schedule_cleanup_retry(thread: &mut Thread, error: String) {
     let inaccessible = inaccessible_cleanup_attempts(thread);
     thread.cleanup_error = Some(error);
     thread.cleanup_attempts = thread.cleanup_attempts.saturating_add(1);
+    if thread.deletion_confirmation_pending_since.is_some()
+        && thread
+            .cleanup_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("deletion_recovery_unconfirmed:"))
+    {
+        thread.state = "deletion_unconfirmed".into();
+        thread.cleanup_retry_at = 0;
+        return;
+    }
     thread.cleanup_inaccessible_attempts = Some(if inaccessible_cleanup_error(thread) {
         inaccessible.saturating_add(1)
     } else {
@@ -652,9 +677,23 @@ async fn retire_remote(state: &State, thread: &mut Thread, config: &Config) -> R
         // Persist replacement tabs before browser work so a retry reuses them.
         thread.target = Some(page.id.clone());
         state.store.lock().unwrap().save_thread(thread)?;
-        let evidence = chatgpt::delete_conversation(&mut page, url).await?;
+        let previously_confirmed = thread.deletion_confirmation_pending_since.is_some();
+        let expected_url = url.clone();
+        let evidence = chatgpt::delete_conversation_managed(
+            &mut page,
+            &expected_url,
+            previously_confirmed,
+            || {
+                if thread.deletion_confirmation_pending_since.is_none() {
+                    thread.deletion_confirmation_pending_since = Some(now());
+                    state.store.lock().unwrap().save_thread(thread)?;
+                }
+                Ok(())
+            },
+        )
+        .await?;
         thread.deletion_receipt = Some(research_core::DeletionReceipt {
-            url: url.clone(),
+            url: expected_url,
             confirmed_at: now(),
             evidence: evidence.into(),
         });
@@ -788,6 +827,32 @@ mod tests {
     }
 
     const INACCESSIBLE_ERROR: &str = "deletion_access_unavailable: owned conversation is inaccessible; deletion is not confirmed";
+
+    #[tokio::test]
+    async fn ambiguous_confirmation_survives_restart_and_unconfirmed_recovery_stops_automatic_loads()
+    -> Result<()> {
+        let (dir, state) = cleanup_test_state()?;
+        let mut thread = cleanup_test_thread(&state, "confirmation-pending")?;
+        thread.deletion_confirmation_pending_since = Some(now());
+        schedule_cleanup_retry(
+            &mut thread,
+            "deletion_recovery_unconfirmed: observation-only recovery found no acknowledgement"
+                .into(),
+        );
+        assert_eq!(thread.state, "deletion_unconfirmed");
+        assert!(thread.deletion_receipt.is_none());
+        state.store.lock().unwrap().save_thread(&thread)?;
+        *state.store.lock().unwrap() = Store::open(&dir.path().join("state.sqlite"))?;
+        cleanup(&state).await?;
+        let saved = state.store.lock().unwrap().thread(&thread.id)?;
+        assert_eq!(
+            saved.deletion_confirmation_pending_since,
+            thread.deletion_confirmation_pending_since
+        );
+        assert_eq!(saved.state, "deletion_unconfirmed");
+        assert!(!dir.path().join("chrome.json").exists());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn inaccessible_cleanup_is_spaced_bounded_and_stays_stopped_after_restart() -> Result<()>

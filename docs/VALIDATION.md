@@ -148,6 +148,9 @@ the conversation appeared under that project in the sidebar. The migrated login 
 - Navigation waits through a short preceding UI cooldown without restarting earlier steps.
   Cleanup control probes are passive: they neither click nor create deletion bindings. Missing
   controls don't consume slots, and an already-open owned project isn't repeatedly navigated.
+- Deletion confirmation checkpoints survive restart without claiming a receipt. Inconclusive
+  observation-only recovery stops in `deletion_unconfirmed` without launching another automatic
+  retry. Explicit recovery retains the checkpoint and cannot click Delete again.
 - The real CLI lifecycle test polls queued work 20 times and verifies that neither browser actions
   nor persistent load deadlines change. It never launches Chrome or submits an account message.
 - Independent telemetry tests reject non-ChatGPT origins, correlate requests by CDP session,

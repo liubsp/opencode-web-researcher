@@ -40,6 +40,15 @@ pub async fn verify_project(page: &mut Page, expected: &str) -> Result<()> {
 }
 
 async fn action(page: &mut Page, op: &str, argument: Value) -> Result<Value> {
+    action_managed(page, op, argument, || Ok(())).await
+}
+
+async fn action_managed(
+    page: &mut Page,
+    op: &str,
+    argument: Value,
+    before_dispatch: impl FnOnce() -> Result<()>,
+) -> Result<Value> {
     if matches!(op, "open_chat_menu" | "delete_menu_item" | "confirm_delete") {
         let ready = page
             .eval(&format!(
@@ -81,6 +90,7 @@ async fn action(page: &mut Page, op: &str, argument: Value) -> Result<Value> {
     ) {
         page.log_action(op);
     }
+    before_dispatch()?;
     page.eval(&format!(
         "({ACTION})({})",
         json!({"op":op,"argument":argument})
@@ -277,6 +287,15 @@ pub async fn stop(page: &mut Page) -> Result<bool> {
 }
 
 pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<&'static str> {
+    delete_conversation_managed(page, expected_url, false, || Ok(())).await
+}
+
+pub async fn delete_conversation_managed(
+    page: &mut Page,
+    expected_url: &str,
+    previously_confirmed: bool,
+    mut before_confirmation: impl FnMut() -> Result<()>,
+) -> Result<&'static str> {
     ensure!(
         research_browser::conversation_url(expected_url),
         "Missing exact conversation URL"
@@ -287,10 +306,19 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
         return Ok("ui_notice");
     }
     let stage = action(page, "cleanup_stage", json!(expected_url)).await?;
-    ensure!(
-        stage["confirmed"] != true,
-        "deletion_unknown: previous confirmation has no acknowledgement; refusing to repeat it"
-    );
+    if previously_confirmed || stage["confirmed"] == true {
+        // Persist an observed old UI checkpoint too. Recovery is navigation/observation only,
+        // even if a full document load discards the in-page binding or the service restarts.
+        before_confirmation()?;
+        page.command("Page.navigate", json!({"url":expected_url}))
+            .await?;
+        if let Some(evidence) = wait_for_deletion(page, expected_url).await {
+            return Ok(evidence);
+        }
+        bail!(
+            "deletion_recovery_unconfirmed: previous confirmation remains unacknowledged after observation-only recovery; refusing to repeat it"
+        );
+    }
     // The composer can mount before conversation hydration/menu controls. Wait
     // for an identity-bound menu rather than mistaking that intermediate UI for failure.
     let confirming = stage["confirming"] == true;
@@ -344,7 +372,7 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
     }
     page.watch_deletion(expected_url).await?;
     ensure!(
-        wait_cleanup_control(page, "confirm_delete", expected_url).await?,
+        wait_cleanup_confirmation(page, expected_url, &mut before_confirmation).await?,
         "delete_confirmation_unavailable: owned deletion dialog is missing or ambiguous"
     );
     if let Some(evidence) = wait_for_deletion(page, expected_url).await {
@@ -378,6 +406,32 @@ async fn wait_cleanup_control(page: &mut Page, op: &str, expected_url: &str) -> 
             {
                 return Err(error);
             }
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
+async fn wait_cleanup_confirmation(
+    page: &mut Page,
+    expected_url: &str,
+    before_confirmation: &mut impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut intent_written = false;
+        let result = action_managed(page, "confirm_delete", json!(expected_url), || {
+            before_confirmation()?;
+            intent_written = true;
+            Ok(())
+        })
+        .await;
+        match result {
+            Ok(result) if result["ok"] == true => return Ok(true),
+            Ok(_) if intent_written => bail!(
+                "deletion_unknown: confirmation control changed after durable intent; recovery must not repeat it"
+            ),
+            Err(error) => return Err(error),
             _ => {}
         }
     }

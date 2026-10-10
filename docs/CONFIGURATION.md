@@ -181,6 +181,11 @@ permanent cleanup failure, not evidence that the chat was deleted. Local history
 health reports manual review separately from retryable cleanup. Only an explicit `retire` operation
 reopens a bounded retry series. Other errors retain the ordinary backoff.
 
+Deletion confirmation is checkpointed before the click. A missing acknowledgement permits one
+paced, observation-only reopening of the exact chat, never another Delete click. If recovery still
+has no identity-bound evidence, `deletion_unconfirmed` stops automatic browser work. An explicit
+scoped `retire` can request another observation-only recovery; it doesn't clear the checkpoint.
+
 ### Accessing transcript files
 
 Active chats have a combined capture at `transcripts/<thread-id>/thread.md`; final copies live at

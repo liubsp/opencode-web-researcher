@@ -269,6 +269,8 @@ pub struct Thread {
     pub cleanup_inaccessible_attempts: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletion_receipt: Option<DeletionReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletion_confirmation_pending_since: Option<i64>,
 }
 
 impl Thread {

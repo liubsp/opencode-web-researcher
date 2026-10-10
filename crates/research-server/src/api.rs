@@ -124,7 +124,10 @@ fn service_status(state: &State, project: Option<&str>) -> Value {
                 || thread.prompts >= 10
                 || now() >= thread.inactivity_deadline(&config);
             if due && jobs.iter().all(research_core::Job::terminal) {
-                let automatic_retry = thread.state != "deletion_inaccessible";
+                let automatic_retry = !matches!(
+                    thread.state.as_str(),
+                    "deletion_inaccessible" | "deletion_unconfirmed"
+                );
                 if automatic_retry {
                     pending += 1;
                 } else {
@@ -384,7 +387,10 @@ async fn dispatch(state: &State, input: Value) -> Result<Value> {
             if thread.state != "remote_deleted" {
                 // An explicit retirement request after fixing a blocker may retry
                 // immediately; ordinary background failures still retain backoff.
-                if thread.state == "deletion_inaccessible" {
+                if matches!(
+                    thread.state.as_str(),
+                    "deletion_inaccessible" | "deletion_unconfirmed"
+                ) {
                     thread.state = "deletion_pending".into();
                 }
                 thread.cleanup_inaccessible_attempts = Some(0);
