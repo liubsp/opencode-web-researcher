@@ -130,13 +130,16 @@ impl Page {
             match pacer.admit(kind) {
                 Ok(()) => return Ok(()),
                 Err(error) => {
-                    if let Some(deferred) = error.downcast_ref::<pacing::Deferred>()
-                        && !matches!(kind, pacing::Interaction::Navigation)
-                        && deferred.next_at > research_core::now()
-                        && deferred.next_at - research_core::now() <= 180
-                    {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                        continue;
+                    if error.downcast_ref::<pacing::Deferred>().is_some() {
+                        let status = pacer.status()?;
+                        let at = pacing::precise_now();
+                        if status.paused_until_ms <= at
+                            && (!matches!(kind, pacing::Interaction::Navigation)
+                                || status.next_account_at_ms.max(status.next_load_at_ms) <= at)
+                        {
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            continue;
+                        }
                     }
                     return Err(error);
                 }

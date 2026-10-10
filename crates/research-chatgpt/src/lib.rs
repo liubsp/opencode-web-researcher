@@ -40,6 +40,17 @@ pub async fn verify_project(page: &mut Page, expected: &str) -> Result<()> {
 }
 
 async fn action(page: &mut Page, op: &str, argument: Value) -> Result<Value> {
+    if matches!(op, "open_chat_menu" | "delete_menu_item" | "confirm_delete") {
+        let ready = page
+            .eval(&format!(
+                "({ACTION})({})",
+                json!({"op":op,"argument":argument,"probe":true})
+            ))
+            .await?;
+        if ready["ok"] != true {
+            return Ok(ready);
+        }
+    }
     if !matches!(
         op,
         "model_status"
@@ -307,7 +318,7 @@ pub async fn delete_conversation(page: &mut Page, expected_url: &str) -> Result<
                 break;
             }
         }
-        if attempt == 19 {
+        if attempt == 19 && state["project_landing"] != true {
             // Older project chats may be absent from the truncated sidebar, and
             // the header's generic More menu can contain Plugins but no Delete.
             // The project landing page provides an ID-bound authoritative row.

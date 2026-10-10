@@ -132,6 +132,18 @@ async fn paced_ui_and_navigation_share_deadlines_but_urgent_stop_is_immediate() 
     research_chatgpt::send_managed(&mut page, Some("synthetic text"), |_| Ok(true)).await?;
     assert_eq!(page.eval("window.sent").await?, 1);
     assert_eq!(pacer.status()?.next_load_at_ms, deadline);
+    let mut short_wait = serde_json::to_value(pacer.status()?)?;
+    short_wait["next_load_at_ms"] = json!(0);
+    short_wait["next_account_at_ms"] = json!(0);
+    std::fs::write(
+        dir.join("browser-pacing.json"),
+        serde_json::to_vec(&short_wait)?,
+    )?;
+    page.interaction(Interaction::Ui).await?;
+    let start = Instant::now();
+    page.command("Page.navigate", json!({"url":"about:blank"}))
+        .await?;
+    assert!(start.elapsed() >= Duration::from_secs(1));
     page.eval(r#"document.body.insertAdjacentHTML('beforeend','<button aria-label="Stop generating" onclick="window.stopped=true">Stop</button>')"#).await?;
     observer.abort();
     let _ = observer.await;
@@ -384,6 +396,12 @@ async fn deletion_menu_uses_current_chat_header_without_sidebar_history() -> Res
         .await?;
     let action = include_str!("../src/scripts/action.js")
         .replace("location.href", "'https://chatgpt.com/c/fixture'");
+    assert_eq!(page.eval(&format!("({action})({{op:'open_chat_menu',argument:'https://chatgpt.com/c/fixture',probe:true}})")).await?["ok"], true);
+    assert_eq!(
+        page.eval("window.opened === undefined && window.__researchCleanup === undefined")
+            .await?,
+        true
+    );
     let wrong =
         format!("({action})({{op:'open_chat_menu',argument:'https://chatgpt.com/c/other'}})");
     assert_eq!(page.eval(&wrong).await?["ok"], false);

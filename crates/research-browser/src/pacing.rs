@@ -43,6 +43,7 @@ pub struct Status {
     pub throttled_responses: u64,
     pub last_http_error: Option<u16>,
     pub last_throttled_at: i64,
+    pub paused_until_ms: i64,
     pub observer_connected: bool,
     pub observer_last_event_at: i64,
     /// Local CDP readiness only; omitted from health and diagnostic logs.
@@ -55,6 +56,7 @@ impl Status {
                 self.next_ui_at_ms,
                 self.next_account_at_ms,
                 self.next_load_at_ms,
+                self.paused_until_ms,
                 self.last_action_at_ms
             ]
             .iter()
@@ -227,6 +229,7 @@ impl Pacer {
                         s.last_throttled_at = now();
                         let until = precise_now()
                             + retry_after.unwrap_or(900).clamp(60, 86400) as i64 * 1000;
+                        s.paused_until_ms = s.paused_until_ms.max(until);
                         s.next_account_at_ms = s.next_account_at_ms.max(until);
                         s.next_load_at_ms = s.next_load_at_ms.max(until);
                         s.next_ui_at_ms = s.next_ui_at_ms.max(until);
@@ -281,7 +284,7 @@ impl Pacer {
     }
 }
 
-fn precise_now() -> i64 {
+pub(crate) fn precise_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

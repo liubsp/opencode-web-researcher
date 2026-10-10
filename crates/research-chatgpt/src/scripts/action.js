@@ -1,4 +1,4 @@
-({op, argument}) => {
+({op, argument, probe = false}) => {
   const visible = el => !!el && el.getClientRects().length > 0 && !el.closest('[inert],[hidden]');
   const label = el => (el.getAttribute('aria-label') || el.innerText || '').trim();
   const controls = () => [...document.querySelectorAll('button,[role="menuitem"],[role="option"],[role="menuitemradio"],.__menu-item[tabindex]')].filter(visible);
@@ -33,12 +33,14 @@
   const click = el => {
     if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return {ok:false, available:available()};
     const selected = label(el);
+    if (probe) return {ok:true};
     for (const type of ['pointerdown','pointerup']) el.dispatchEvent(new PointerEvent(type, {bubbles:true,pointerId:1,pointerType:'mouse',button:0,buttons:type==='pointerdown'?1:0}));
     el.click(); return {ok:true,selected};
   };
   const find = pattern => controls().find(el => pattern.test(label(el)));
   const openCleanupMenu = (trigger, expected) => {
     if (!trigger || !visible(trigger)) return {ok:false};
+    if (probe) return {ok:!trigger.disabled && trigger.getAttribute('aria-disabled') !== 'true'};
     const previous = cleanupBinding(expected);
     if (previous?.trigger !== trigger) window.__researchCleanup = {key:chatKey(expected),trigger};
     return trigger.getAttribute('aria-expanded') === 'true' ? {ok:true} : click(trigger);
@@ -187,7 +189,7 @@
     const notices = [...document.querySelectorAll('[role="alert"],[role="status"],[data-sonner-toast],main *')].filter(el => visible(el) &&
       !el.closest('[data-message-author-role],[data-content-search-unit-key],article') &&
       (el.matches('[role="alert"],[role="status"],[data-sonner-toast]') || el.childElementCount === 0)).map(el => el.innerText);
-    return {matching, unavailable:notices.some(text => /you (?:don’t|don't) have access to this conversation|unable to load conversation|conversation not found/i.test(text))};
+    return {matching, project_landing:projectLandingFor(location.href, argument), unavailable:notices.some(text => /you (?:don’t|don't) have access to this conversation|unable to load conversation|conversation not found/i.test(text))};
   }
   if (op === 'delete_menu_item') {
     const binding = cleanupBinding(argument);
@@ -199,7 +201,7 @@
     const candidates = menus.flatMap(menu => [...menu.querySelectorAll('[role="menuitem"],button')].filter(el => visible(el) && /^delete$/i.test(label(el))));
     if (candidates.length !== 1) return {ok:false,error:'ambiguous_or_missing_delete_menu'};
     const result = click(candidates[0]);
-    if (result.ok) binding.confirming = true;
+    if (result.ok && !probe) binding.confirming = true;
     return result;
   }
   if (op === 'confirm_delete') {
@@ -210,7 +212,7 @@
     const buttons = [...dialogs[0].querySelectorAll('button')].filter(el => visible(el) && /^delete(?: chat| conversation)?$/i.test(label(el)));
     if (buttons.length !== 1) return {ok:false};
     const result = click(buttons[0]);
-    if (result.ok) { binding.confirmed = true; binding.confirming = false; }
+    if (result.ok && !probe) { binding.confirmed = true; binding.confirming = false; }
     return result;
   }
   if (op === 'deleted') {
