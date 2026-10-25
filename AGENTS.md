@@ -4,7 +4,6 @@
 - Before declaring success, test the real user-facing path. Distinguish unit, integration, installation, and live behavior evidence.
 - Investigate the cause of failures and prevent recurrence proportionately; avoid symptom-only workarounds.
 - Run the repository's complete local validation before committing or pushing, including static checks and tests.
-- For requested repository changes, commit and push after validation by default; do not wait for a separate push request unless the user asks to keep changes local.
 - After pushing, confirm required remote checks pass. If they fail, inspect and resolve them before calling the work done.
 - Account for cached or long-lived processes when validating installed changes; confirm the running system loaded the new code.
 - Keep status reports precise: state what is verified, what is not, and any remaining blocker.
