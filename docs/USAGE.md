@@ -21,6 +21,18 @@ Be patient: queue time and the composition delay come before ChatGPT's own resea
 waits on the existing request instead of sending reminders. Cited links aren't automatically
 independently verified; the report should say which checks were actually performed.
 
+## Cancel research
+
+Ask the parent to message the same researcher session to cancel its outstanding service requests
+and stop, then wait for its report. Interrupting or terminating the child agent or its tool wait
+does **not** cancel the independent research-service work. Only the researcher has access to the
+research tools, so the parent must delegate cancellation rather than just stop waiting.
+
+The researcher calls `research_cancel` for this task's outstanding requests and checks the result.
+`cancel_requested` means a stop was requested, not confirmed; blocked or ambiguous cancellation
+must be reported as unresolved. Work may already have completed. Cancellation does not undo sent
+prompts, restore prompt budget, or delete chats and saved results.
+
 ## Read existing ChatGPT chats
 
 Supply conversation URLs or IDs accessible to the signed-in research Chrome account:

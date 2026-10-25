@@ -50,7 +50,15 @@ test("global setup uses the global agents directory and preserves customized ins
     await writeFile(join(root, "opencode.jsonc"), '{ // keep me\n "shell":"custom"\n}');
     await install(root, process.execPath, true);
     const agent = join(root, "agents/web-researcher.md");
-    assert.match(await readFile(agent, "utf8"), /mode: subagent/);
+    const installed = await readFile(agent, "utf8");
+    assert.match(installed, /mode: subagent/);
+    const description = installed.split("\n").find(line => line.startsWith("description:"))!;
+    assert.match(description, /message the SAME researcher session/);
+    assert.match(description, /wait for its confirmation/);
+    assert.match(description, /Interrupting or terminating.*does NOT cancel service research/);
+    assert.match(installed, /Call `research_cancel` for every outstanding request belonging to this task/);
+    assert.match(installed, /If it is `cancel_requested`, use `research_wait`\/`research_get`/);
+    assert.match(installed, /report the unresolved state and request ID for recovery/);
     await assert.rejects(access(join(root, ".opencode")));
     await install(root, process.execPath, true);
     const config = await readFile(join(root, "opencode.jsonc"), "utf8");
