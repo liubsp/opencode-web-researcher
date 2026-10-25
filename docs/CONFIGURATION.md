@@ -78,6 +78,10 @@ Page loading can overlap prompt composition. Deadlines use millisecond precision
 because its cooldown expired. Passive DOM inspection and local tab closure consume no action slot.
 Stop is an urgent safety exception; cancellation also interrupts a pending action before it executes.
 Imports and cleanup wait while a managed generation is being observed so they cannot delay Stop.
+The worker retains its CDP connection and renderer focus emulation across polling and scheduling
+yields. It does not repeatedly toggle page visibility while observing a request; those transitions
+can cause ChatGPT to refetch background data even without a page load. The connection is released
+when the request finishes, needs attention, or is replaced, and recreated only when needed.
 
 Status and result retrieval are browser-free. Results provide `next_wait_seconds` and, for managed
 requests, `next_browser_action_at` (Unix seconds) as polling hints, not commands to refresh ChatGPT.

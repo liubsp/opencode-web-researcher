@@ -163,6 +163,18 @@ the conversation appeared under that project in the sidebar. The migrated login 
   and the browser/daemon idle lifecycle tests pass locally. These checks do not establish the cause
   of earlier reported throttling or guarantee that the account will never be throttled.
 
+### Stable observation connections
+
+- The worker retains one request-bound CDP connection across composition waits and observation
+  yields. Unit tests cover reuse, request/target changes, explicit release, and failed replacement.
+- The isolated Chrome suite runs two full observation windows without focus or visibility changes,
+  then verifies that cancellation still stops the synthetic generation without a new prompt.
+- The installed release also passed an isolated daemon check with an intercepted synthetic ChatGPT
+  page: 55 seconds of observation, no steady-state focus changes or network requests, and confirmed
+  cancellation. It made no real account requests. Existing research records and saved artifacts were
+  unchanged by activation. These checks verify removal of focus cycling, not resolution of every
+  live ChatGPT loading error or immunity from account throttling.
+
 ## In progress
 
 The published Windows bootstrap script and its remote source download were exercised in an isolated

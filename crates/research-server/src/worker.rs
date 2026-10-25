@@ -42,21 +42,61 @@ impl StopClock {
     }
 }
 
+/// Keep focus emulation attached across worker yields. Dropping/recreating the CDP
+/// session toggles page visibility and can trigger ChatGPT's background refetches.
+#[derive(Default)]
+struct ActivePage {
+    current: Option<(String, Page)>,
+}
+
+impl ActivePage {
+    async fn get(
+        &mut self,
+        request: &str,
+        target: Option<&str>,
+        connect: impl std::future::Future<Output = Result<Page>>,
+    ) -> Result<&mut Page> {
+        if self
+            .current
+            .as_ref()
+            .is_none_or(|(id, page)| id != request || target != Some(page.id.as_str()))
+        {
+            self.current = None;
+            self.current = Some((request.into(), connect.await?));
+        }
+        Ok(&mut self.current.as_mut().unwrap().1)
+    }
+
+    fn clear(&mut self) {
+        self.current = None;
+    }
+}
+
 pub async fn run(state: State) {
     let mut last_cleanup = Instant::now() - Duration::from_secs(60);
     let mut pacing = PacingClock::default();
     let mut stop_clock = StopClock::default();
+    let mut active_page = ActivePage::default();
     loop {
         let job = state.store.lock().unwrap().claim_next_job(now());
         match job {
             Ok(Some(mut job)) => {
-                if let Err(error) = process(&state, &mut job, &mut pacing, &mut stop_clock).await {
+                if let Err(error) = process(
+                    &state,
+                    &mut job,
+                    &mut pacing,
+                    &mut stop_clock,
+                    &mut active_page,
+                )
+                .await
+                {
                     if error
                         .downcast_ref::<research_browser::pacing::Deferred>()
                         .is_some()
                     {
                         // The same persisted work remains queued; admission denial isn't failure.
                     } else {
+                        active_page.clear();
                         let mut store = state.store.lock().unwrap();
                         // Reload to avoid overwriting a concurrently requested cancellation.
                         if let Ok(mut current) = store.job(&job.id) {
@@ -82,13 +122,16 @@ pub async fn run(state: State) {
                     }
                 }
                 let store = state.store.lock().unwrap();
+                if store.job(&job.id).is_ok_and(|current| current.terminal()) {
+                    active_page.clear();
+                }
                 if let Ok(current) = store.job(&job.id)
                     && let Err(error) = store.checkpoint(&current, &state.dir)
                 {
                     eprintln!("Local transcript save failed: {error}");
                 }
             }
-            Ok(None) => {}
+            Ok(None) => active_page.clear(),
             Err(error) => eprintln!("Queue error: {error}"),
         }
         let generating = state
@@ -148,6 +191,7 @@ async fn process(
     job: &mut Job,
     pacing: &mut PacingClock,
     stop_clock: &mut StopClock,
+    active_page: &mut ActivePage,
 ) -> Result<()> {
     let mut composition_ready = true;
     if job.state == "pacing" {
@@ -175,29 +219,33 @@ async fn process(
         research_browser::pacing::Pacer::new(&state.dir)
             .ready(research_browser::pacing::Interaction::Navigation)?;
     }
-    let chrome = Chrome::ensure_paced(&state.dir, &job.config).await?;
     let observing = matches!(
         job.state.as_str(),
         "submitting" | "waiting" | "timed_out" | "cancel_requested"
     );
-    if observing {
-        ensure!(
-            thread.target.is_some() || thread.url.is_some(),
-            "No persisted target for submission recovery"
-        );
-        if thread.url.is_none() {
-            ensure!(
-                chrome
-                    .targets()
-                    .await?
-                    .iter()
-                    .any(|t| t["id"].as_str() == thread.target.as_deref()),
-                "submission_unknown: original target lost before conversation URL was saved"
-            );
-        }
-    }
-    let mut page = chrome
-        .reconnect(thread.target.as_deref(), reconnect_url(&thread, observing))
+    let page = active_page
+        .get(&job.id, thread.target.as_deref(), async {
+            let chrome = Chrome::ensure_paced(&state.dir, &job.config).await?;
+            if observing {
+                ensure!(
+                    thread.target.is_some() || thread.url.is_some(),
+                    "No persisted target for submission recovery"
+                );
+                if thread.url.is_none() {
+                    ensure!(
+                        chrome
+                            .targets()
+                            .await?
+                            .iter()
+                            .any(|t| t["id"].as_str() == thread.target.as_deref()),
+                        "submission_unknown: original target lost before conversation URL was saved"
+                    );
+                }
+            }
+            chrome
+                .reconnect(thread.target.as_deref(), reconnect_url(&thread, observing))
+                .await
+        })
         .await?;
     thread.target = Some(page.id.clone());
     state.store.lock().unwrap().save_thread(&thread)?;
@@ -227,10 +275,10 @@ async fn process(
         if thread.url.is_none()
             && let Some(project_url) = &thread.chatgpt_project_url
         {
-            chatgpt::verify_project(&mut page, project_url).await?;
+            chatgpt::verify_project(page, project_url).await?;
         }
         {
-            let snapshot = chatgpt::ready(&mut page).await?;
+            let snapshot = chatgpt::ready(page).await?;
             let draft = snapshot["composer_text"].as_str().unwrap_or_default();
             if !draft.trim().is_empty() && draft != research_core::canonical_prompt(&job.prompt) {
                 let managed = {
@@ -252,18 +300,18 @@ async fn process(
                     managed.is_some(),
                     "composer_not_empty: refusing to overwrite unrelated text"
                 );
-                chatgpt::clear_managed_draft(&mut page, draft).await?;
+                chatgpt::clear_managed_draft(page, draft).await?;
             }
         }
         let setup = chatgpt::prepare(
-            &mut page,
+            page,
             &job.config,
             thread.deep_research,
             thread.url.is_none(),
         )
         .await?;
         let prompt = job.prompt.clone();
-        chatgpt::fill_managed(&mut page, &prompt, |draft| {
+        chatgpt::fill_managed(page, &prompt, |draft| {
             job.draft = Some(draft.into());
             ensure!(
                 state.store.lock().unwrap().save_progress(job)?,
@@ -275,7 +323,7 @@ async fn process(
         job.baseline = Some(setup["state"]["turns"].as_array().map_or(0, Vec::len));
         job.submission = chatgpt::observation::submission_anchor(&setup["state"]);
         let prompt = job.prompt.clone();
-        if !chatgpt::send_managed(&mut page, Some(&prompt), |snapshot| {
+        if !chatgpt::send_managed(page, Some(&prompt), |snapshot| {
             let mut store = state.store.lock().unwrap();
             let current = store.job(&job.id)?;
             if current.terminal() || current.state == "cancel_requested" { return Ok(false); }
@@ -294,7 +342,7 @@ async fn process(
             return Ok(());
         }
     }
-    observe(state, job, &mut thread, &mut page, stop_clock).await
+    observe(state, job, &mut thread, page, stop_clock).await
 }
 
 fn reconnect_url(thread: &Thread, observing: bool) -> Option<&str> {
@@ -1051,6 +1099,147 @@ mod tests {
                 .contains("receipt does not match")
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_page_survives_yields_but_not_request_target_changes_or_errors() -> Result<()> {
+        use futures_util::{SinkExt, StreamExt};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("ws://127.0.0.1:{}/test", listener.local_addr()?.port());
+        let focuses = Arc::new(AtomicUsize::new(0));
+        let remote_focuses = focuses.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let remote_focuses = remote_focuses.clone();
+                tokio::spawn(async move {
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    while let Some(Ok(Message::Text(raw))) = socket.next().await {
+                        let request: serde_json::Value = serde_json::from_str(&raw).unwrap();
+                        assert_eq!(request["method"], "Emulation.setFocusEmulationEnabled");
+                        remote_focuses.fetch_add(1, Ordering::SeqCst);
+                        if socket
+                            .send(Message::Text(
+                                json!({"id":request["id"],"result":{}}).to_string().into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        let connect = |target: &'static str| {
+            let endpoint = endpoint.clone();
+            async move {
+                let mut page = Page::connect(target.into(), &endpoint).await?;
+                page.command(
+                    "Emulation.setFocusEmulationEnabled",
+                    json!({"enabled":true}),
+                )
+                .await?;
+                Ok(page)
+            }
+        };
+        let mut active = ActivePage::default();
+        active.get("first", None, connect("one")).await?;
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+            active
+                .get("first", Some("one"), async {
+                    bail!("must not reconnect during a yield")
+                })
+                .await?;
+        }
+        assert_eq!(focuses.load(Ordering::SeqCst), 1);
+        active.get("first", Some("two"), connect("two")).await?;
+        active.get("second", Some("two"), connect("two")).await?;
+        assert_eq!(focuses.load(Ordering::SeqCst), 3);
+        active.clear();
+        active.get("second", Some("two"), connect("two")).await?;
+        assert_eq!(focuses.load(Ordering::SeqCst), 4);
+        assert!(
+            active
+                .get("third", Some("two"), async { bail!("connection failed") })
+                .await
+                .is_err()
+        );
+        assert!(active.current.is_none());
+        active.get("third", Some("two"), connect("two")).await?;
+        assert_eq!(focuses.load(Ordering::SeqCst), 5);
+        active.clear();
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires isolated Chrome; run scripts/check-browser.mjs; no account requests"]
+    async fn active_observation_keeps_focus_across_worker_yields() -> Result<()> {
+        let (_dir, state) = cleanup_test_state()?;
+        let chrome_dir = std::path::PathBuf::from(
+            std::env::var_os("WEB_RESEARCH_FIXTURE_HOME")
+                .ok_or_else(|| anyhow::anyhow!("Use scripts/check-browser.mjs"))?,
+        );
+        ensure!(
+            chrome_dir.join("fixture-owned").is_file(),
+            "Not an isolated browser fixture"
+        );
+        let chrome = Chrome::ensure(&chrome_dir, &Config::default()).await?;
+        let mut active = ActivePage::default();
+        let mut job = state.store.lock().unwrap().submit(
+            &Submit {
+                project: "synthetic".into(),
+                session: "synthetic".into(),
+                key: "focus".into(),
+                thread_id: None,
+                prompt: "ours".into(),
+                deep_research: false,
+            },
+            Config::default(),
+            now(),
+        )?;
+        job.state = "waiting".into();
+        job.baseline = Some(0);
+        job.submitted_at = Some(now());
+        state.store.lock().unwrap().save_job(&job)?;
+        let target = active
+            .get(&job.id, None, chrome.open("about:blank"))
+            .await?
+            .id
+            .clone();
+        let result = async {
+            let mut thread = state.store.lock().unwrap().thread(&job.thread_id)?;
+            thread.target = Some(target.clone());
+            state.store.lock().unwrap().save_thread(&thread)?;
+            let page = &mut active.current.as_mut().unwrap().1;
+            page.eval("document.body.innerHTML = '<div data-message-author-role=\"user\">ours</div><button aria-label=\"Stop generating\" onclick=\"this.remove()\">Stop</button>'; globalThis.focusChanges = []; for (const event of ['focus','blur','visibilitychange']) window.addEventListener(event, e => focusChanges.push(e.type))").await?;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            page.eval("focusChanges.length = 0").await?;
+            let mut pacing = PacingClock::default();
+            let mut stopping = StopClock::default();
+            for _ in 0..2 {
+                process(&state, &mut job, &mut pacing, &mut stopping, &mut active).await?;
+                assert_eq!(state.store.lock().unwrap().job(&job.id)?.state, "waiting");
+                let snapshot = active.current.as_mut().unwrap().1.eval("({changes:focusChanges,focused:document.hasFocus(),visibility:document.visibilityState})").await?;
+                assert_eq!(snapshot, json!({"changes":[],"focused":true,"visibility":"visible"}));
+            }
+            state.store.lock().unwrap().cancel(&job.id, now())?;
+            process(&state, &mut job, &mut pacing, &mut stopping, &mut active).await?;
+            assert_eq!(state.store.lock().unwrap().job(&job.id)?.state, "cancelled");
+            assert_eq!(state.store.lock().unwrap().thread(&job.thread_id)?.prompts, 1);
+            assert_eq!(active.current.as_mut().unwrap().1.eval("focusChanges").await?, json!([]));
+            Ok(())
+        }.await;
+        active.clear();
+        chrome.close(&target).await?;
+        result
     }
 
     #[tokio::test]

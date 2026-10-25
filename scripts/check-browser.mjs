@@ -57,6 +57,13 @@ try {
     timeout: 180_000, killSignal: "SIGKILL",
   });
   if (result.error) throw result.error;
+  if (result.status === 0) {
+    result = spawnSync("cargo", ["test", "-p", "research-server", "active_observation_keeps_focus_across_worker_yields", "--locked", "--", "--ignored", "--nocapture"], {
+      stdio: "inherit", env: { ...process.env, WEB_RESEARCH_FIXTURE_HOME: home },
+      timeout: 120_000, killSignal: "SIGKILL",
+    });
+    if (result.error) throw result.error;
+  }
 } finally {
   if (!result && fixtureProcess?.exitCode === null) fixtureProcess.kill();
   let record;
