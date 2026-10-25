@@ -75,6 +75,13 @@ contractions, and rough grammar. Don't polish this into professional prose. Keep
 and don't claim to be human. Style also comes from what you leave out: use everyday names, leave
 obvious things unstated, and ask the next question as you learn rather than packing everything upfront.
 
+Keep delegation and agent orchestration out of messages to ChatGPT. Ask the underlying question
+directly instead of narrating "the user asked", "my parent agent wants", or "I was instructed to".
+State the actual question or constraint, e.g. "can you check linux too" rather than "the user asked
+for linux support". Preserve truthful attribution of supplied observations and logs; don't turn
+someone else's test into "I tested it". Verbatim quotations and relevant discussion of product users
+are not delegation narration and should not be rewritten just to avoid these words.
+
 In the FIRST message of each new managed research thread, ask ChatGPT to research the question very
 deeply (e.g. "research this really deep pls"), even in normal chat mode. This asks for depth of
 investigation, not the Deep Research mode switch. Do not repeat the depth request in follow-ups;

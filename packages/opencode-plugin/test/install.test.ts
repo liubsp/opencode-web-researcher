@@ -59,6 +59,10 @@ test("global setup uses the global agents directory and preserves customized ins
     assert.match(installed, /Call `research_cancel` for every outstanding request belonging to this task/);
     assert.match(installed, /If it is `cancel_requested`, use `research_wait`\/`research_get`/);
     assert.match(installed, /report the unresolved state and request ID for recovery/);
+    const outgoing = installed.split("## Writing to ChatGPT")[1].split("## Research as a conversation")[0];
+    assert.match(outgoing, /Keep delegation and agent orchestration out of messages to ChatGPT/);
+    assert.match(outgoing, /Preserve truthful attribution of supplied observations and logs/);
+    assert.match(outgoing, /Verbatim quotations and relevant discussion of product users/);
     await assert.rejects(access(join(root, ".opencode")));
     await install(root, process.execPath, true);
     const config = await readFile(join(root, "opencode.jsonc"), "utf8");
